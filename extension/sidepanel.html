@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Home Loan AI Assistant</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #1a1a1a;
+      color: #ffffff;
+      font-family: system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .header {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid #333;
+      flex-shrink: 0;
+      background-color: #1a1a1a;
+    }
+    .header-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      background-color: #555;
+      border-radius: 50%;
+    }
+    .status-dot.active {
+      background-color: #ff5252;
+      box-shadow: 0 0 8px #ff5252;
+      animation: pulse 1.5s infinite;
+    }
+    .panel-title {
+      font-size: 1.1rem;
+      font-weight: bold;
+    }
+    .control-btn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+      background-color: #2e7d32;
+      color: white;
+    }
+    .control-btn.active {
+      background-color: #c62828;
+    }
+    .summary-btn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: background 0.2s;
+      background-color: #1976d2;
+      color: white;
+      margin-top: 8px;
+    }
+    .summary-btn:hover {
+      background-color: #1565c0;
+    }
+    .summary-btn:disabled {
+      background-color: #555;
+      cursor: not-allowed;
+    }
+    .action-buttons {
+      display: flex;
+      gap: 8px;
+    }
+    .action-buttons button {
+      flex: 1;
+    }
+    .clear-btn {
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      transition: color 0.2s;
+    }
+    .clear-btn:hover {
+      color: #ff5252;
+    }
+    #transcript-container {
+      flex-grow: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    /* Card Styles */
+    .utterance-card {
+      background: #2a2a2a;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.95rem;
+      line-height: 1.4;
+      border-left: 3px solid #4a90e2;
+      word-wrap: break-word;
+    }
+    .utterance-card.finalized {
+      border-left-color: #444;
+    }
+    .ai-response-card {
+      background: #1e2a3a;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.95rem;
+      line-height: 1.4;
+      border-left: 3px solid #4a90e2;
+      margin-left: 12px;
+      position: relative;
+    }
+    .ai-section-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #8fb7ff;
+      margin-bottom: 6px;
+    }
+    .ai-section-label.loading {
+      color: #b7c7e6;
+      animation: pulse 1.5s infinite;
+    }
+    .ai-context {
+      font-size: 0.86rem;
+      color: #b7c7e6;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #333;
+      line-height: 1.45;
+    }
+    .ai-suggestion {
+      color: #ffffff;
+      line-height: 1.5;
+    }
+    .copy-button {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #ccc;
+      padding: 4px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Modal Styles */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-content {
+      background: #2a2a2a;
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 90%;
+      max-height: 85vh;
+      overflow-y: auto;
+      position: relative;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #333;
+    }
+    .modal-title {
+      font-size: 1.2rem;
+      font-weight: bold;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      padding: 4px;
+      font-size: 1.5rem;
+      transition: color 0.2s;
+    }
+    .modal-close:hover {
+      color: #fff;
+    }
+    .summary-section {
+      margin-bottom: 20px;
+    }
+    .summary-section h3 {
+      font-size: 1rem;
+      color: #4a90e2;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #333;
+      padding-bottom: 8px;
+    }
+    .summary-item {
+      background: #1e2a3a;
+      padding: 10px;
+      border-radius: 6px;
+    }
+    .summary-card {
+      background: #1e2a3a;
+      border-radius: 10px;
+      padding: 8px 14px;
+      border: 1px solid #2f4058;
+    }
+    .summary-row {
+      display: grid;
+      grid-template-columns: minmax(140px, 220px) 1fr;
+      gap: 16px;
+      align-items: start;
+      padding: 10px 0;
+      border-bottom: 1px solid #2b3648;
+    }
+    .summary-row:last-child {
+      border-bottom: none;
+    }
+    .summary-key {
+      font-size: 0.78rem;
+      color: #8ea4c5;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      word-break: break-word;
+    }
+    .summary-value {
+      font-size: 0.95rem;
+      color: #fff;
+      font-weight: 500;
+      text-align: right;
+      word-break: break-word;
+    }
+    .summary-item-label {
+      font-size: 0.75rem;
+      color: #888;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .summary-item-value {
+      font-size: 0.95rem;
+      color: #fff;
+      font-weight: 500;
+    }
+    .summary-item-value.empty {
+      color: #555;
+      font-style: italic;
+    }
+    .insights-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .insights-list li {
+      background: #1e2a3a;
+      padding: 10px 12px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+      border-left: 3px solid #4a90e2;
+    }
+    .insights-list li strong {
+      color: #4a90e2;
+    }
+    .loading-spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid #333;
+      border-top-color: #1976d2;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title-row">
+      <div class="title-group">
+        <div id="dot" class="status-dot"></div>
+        <span class="panel-title">Home Loan AI Assistant</span>
+      </div>
+      <button id="clear-btn" class="clear-btn" title="Clear Chat">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+      </button>
+    </div>
+    <button id="toggle-btn" class="control-btn">Start Capture</button>
+    <button id="summary-btn" class="summary-btn">
+      <span id="summary-btn-text">📊 Generate Summary & Insights</span>
+    </button>
+  </div>
+  <div id="transcript-container"></div>
+
+  <!-- Summary Modal -->
+  <div id="summary-modal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title">Conversation Summary & Insights</h2>
+        <button id="modal-close" class="modal-close">&times;</button>
+      </div>
+      <div id="modal-body">
+        <!-- Content will be injected here -->
+      </div>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

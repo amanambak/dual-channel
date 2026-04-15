@@ -1,0 +1,24 @@
+# Chrome Extension Frontend
+
+This folder contains the plain-JS Chrome extension frontend.
+
+## Responsibilities
+
+- Start and stop tab audio monitoring
+- Capture tab audio with `tabCapture`
+- Convert audio to PCM in `capture-worklet.js`
+- Stream PCM to the FastAPI backend over WebSocket
+- Render live transcripts, AI suggestions, and conversation summaries
+
+## Setup
+
+1. Copy `config.template.js` to `config.js`.
+2. Point `BACKEND_WS_URL` and `BACKEND_HTTP_URL` to the FastAPI backend.
+3. Load this `extension/` folder as an unpacked extension in Chrome.
+
+## Runtime Split
+
+- `background.js`: extension orchestration and local message storage
+- `offscreen.js`: audio capture and backend WebSocket bridge
+- `sidepanel.js`: live transcript and suggestion UI
+- `capture-worklet.js`: Float32 to Int16 PCM conversion

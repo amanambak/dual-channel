@@ -1,0 +1,13 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "FastAPI Backend for audio transcription service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.116.1",
+    "httpx==0.28.1",
+    "pydantic-settings==2.10.1",
+    "uvicorn[standard]==0.35.0",
+    "websockets==15.0.1",
+]
