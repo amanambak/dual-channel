@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/models"
 
     summary_model: str = "gemini-2.5-flash"
+    fallback_model: str = "gemini-3.1-flash-lite-preview"
     request_timeout_seconds: float = 60.0
 
     model_config = SettingsConfigDict(

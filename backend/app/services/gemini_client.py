@@ -101,6 +101,7 @@ class GeminiClient:
         }
 
         attempts = len(self.retry_delays) + 1
+        current_model = model
         for attempt in range(attempts):
             try:
                 async with httpx.AsyncClient(
@@ -124,6 +125,17 @@ class GeminiClient:
                                 yield text
                 return
             except Exception as exc:
+                # If 503 and we haven't tried fallback yet, retry with fallback model
+                if (
+                    attempt == 0
+                    and "503" in str(exc)
+                    and current_model != self.settings.fallback_model
+                ):
+                    model = self.settings.fallback_model
+                    url = (
+                        f"{self.settings.gemini_base_url}/{model}:streamGenerateContent"
+                    )
+                    continue
                 if attempt >= len(self.retry_delays) or not self._should_retry(exc):
                     raise
                 await asyncio.sleep(self.retry_delays[attempt])
