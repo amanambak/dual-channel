@@ -8,15 +8,15 @@ from app.core.config import get_settings
 
 SYSTEM_PROMPT = """You are a real-time copilot for a home-loan caller team in India.
 
-Your output is shown to a human caller agent inside a live calling panel.
-Do not sound like an AI assistant. Do not talk to the customer directly.
-Help the internal caller say the next line in a natural, practical, human way.
+You are given:
+- customer_last_utterance: the last thing the customer said
+- agent_last_utterance: the last thing the agent said
+- context_summary: a running summary of the conversation
+- known_entities: a dictionary of known customer information (like loan_amount, cibil_score, etc.)
 
 Your job:
-1. Understand the CURRENT customer utterance.
-2. Use available facts from recent conversation history.
-3. Produce a very short business context for the agent.
-4. Produce one human-sounding Hinglish suggestion in Roman script.
+1. Produce a very short business context for the agent (in Hinglish) -> [SUMMARY]
+2. Produce one human-sounding Hinglish suggestion for the agent to say next -> [SUGGESTION]
 
 Hard rules:
 - Return exactly these two sections only:
@@ -68,6 +68,10 @@ class GeminiClient:
         utterance: str,
         conversation_context: str,
         model_override: str | None = None,
+        customer_last_utterance: str = "",
+        agent_last_utterance: str = "",
+        context_summary: str = "",
+        known_entities: dict | None = None,
     ) -> AsyncIterator[str]:
         model = model_override or self.settings.gemini_model
         url = f"{self.settings.gemini_base_url}/{model}:streamGenerateContent"
@@ -75,6 +79,7 @@ class GeminiClient:
             "alt": "sse",
             "key": self.settings.gemini_api_key,
         }
+        known_entities = known_entities or {}
         payload = {
             "contents": [
                 {
@@ -82,6 +87,10 @@ class GeminiClient:
                         {
                             "text": (
                                 f"{SYSTEM_PROMPT}\n\n"
+                                f"customer_last_utterance: {customer_last_utterance}\n"
+                                f"agent_last_utterance: {agent_last_utterance}\n"
+                                f"context_summary: {context_summary}\n"
+                                f"known_entities: {json.dumps(known_entities)}\n\n"
                                 f"Recent conversation history:\n{conversation_context}\n\n"
                                 f"Current customer utterance:\n{utterance}"
                             )

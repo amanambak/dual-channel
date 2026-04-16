@@ -26,10 +26,10 @@ class SessionRuntime:
         self.websocket = websocket
         self.session_id = str(uuid.uuid4())
         self.state = SessionState(session_id=self.session_id)
-        self.deepgram: DeepgramClient | None = None
+        self.deepgrams: dict[str, DeepgramClient] = {}
         self.gemini = GeminiClient()
         self.schema_registry = get_schema_registry()
-        self.deepgram_task: asyncio.Task | None = None
+        self.deepgram_tasks: dict[str, asyncio.Task] = {}
         self.ai_lock = asyncio.Lock()
         self.closed = False
         self.connection_closed = False
@@ -57,8 +57,19 @@ class SessionRuntime:
                 await self.handle_text_message(text)
 
             if data := message.get("bytes"):
-                if self.deepgram is not None:
-                    await self.deepgram.send_audio(data)
+                # Parse channel from first byte
+                # data format: [channel_byte][audio_data...]
+                if len(data) > 1:
+                    channel_byte = data[0]
+                    channel = "customer" if channel_byte == 0 else "agent"
+                    audio_data = data[1:]
+                else:
+                    channel = "customer"
+                    audio_data = data
+
+                deepgram = self.deepgrams.get(channel)
+                if deepgram:
+                    await deepgram.send_audio(bytes(audio_data))
 
     async def handle_text_message(self, raw_message: str) -> None:
         data = json.loads(raw_message)
@@ -68,10 +79,18 @@ class SessionRuntime:
             config = data.get("config", {})
             params = dict(config.get("deepgramParams") or {})
             params.setdefault("interim_results", "true")
+            # Enable multichannel if not already set
+            params.setdefault("multichannel", "true")
             self.gemini_model_override = config.get("geminiModel")
-            self.deepgram = DeepgramClient(params)
-            await self.deepgram.connect()
-            self.deepgram_task = asyncio.create_task(self.read_deepgram())
+
+            # Create deepgram clients for each channel
+            channels = config.get("channels", ["customer", "agent"])
+            for ch in channels:
+                dg = DeepgramClient(params)
+                await dg.connect()
+                self.deepgrams[ch] = dg
+                self.deepgram_tasks[ch] = asyncio.create_task(self.read_deepgram(ch))
+
             await self.send_json(
                 {"type": "session_started", "sessionId": self.session_id}
             )
@@ -80,16 +99,20 @@ class SessionRuntime:
         if message_type == "stop_session":
             await self.close()
 
-    async def read_deepgram(self) -> None:
-        assert self.deepgram is not None
+    async def read_deepgram(self, channel: str) -> None:
+        deepgram = self.deepgrams.get(channel)
+        if not deepgram:
+            return
         try:
             while True:
-                raw_message = await self.deepgram.recv()
+                raw_message = await deepgram.recv()
                 data = json.loads(raw_message)
+                # Add channel info to the data
+                data["channel_id"] = channel
                 await self.handle_deepgram_message(data)
         except Exception as exc:
             if not self.closed:
-                logger.exception("deepgram read failed")
+                logger.exception(f"deepgram read failed for channel {channel}")
                 await self.send_model(
                     ErrorEvent(
                         source="Deepgram",
@@ -101,14 +124,22 @@ class SessionRuntime:
         alternative = self._extract_primary_alternative(data)
         transcript = alternative.get("transcript", "")
         is_final = data.get("is_final", False)
+
+        # Get channel_id from data (set in read_deepgram)
+        channel_id = data.get("channel_id", "customer")
+
+        # Map channel to speaker
+        speaker_map = {"customer": "0", "agent": "1", "0": "0", "1": "1"}
+        speaker = speaker_map.get(channel_id, "0")
+
         metadata = {
             "confidence": alternative.get("confidence"),
             "speech_final": data.get("speech_final", False),
+            "channel": channel_id,
         }
 
         if transcript:
             self._cancel_finalize_task()
-            speaker = alternative.get("speaker")
             await self.send_model(
                 TranscriptEvent(
                     transcript=transcript,
@@ -120,7 +151,6 @@ class SessionRuntime:
 
             if is_final and transcript.strip():
                 confidence = metadata["confidence"]
-                speaker = alternative.get("speaker")
                 if self.should_capture_final_segment(transcript.strip(), confidence):
                     self.state.current_segments.append((transcript.strip(), speaker))
                     self.current_segment_confidences.append(
@@ -190,6 +220,17 @@ class SessionRuntime:
             return
 
         utterance_id = f"utt-{uuid.uuid4().hex[:12]}"
+        # Update speaker-specific last utterances and history
+        if speaker == "0":
+            self.state.customer_last_utterance = text
+            self.state.customer_history.append(text)
+            if len(self.state.customer_history) > 20:
+                self.state.customer_history.pop(0)
+        elif speaker == "1":
+            self.state.agent_last_utterance = text
+            self.state.agent_history.append(text)
+            if len(self.state.agent_history) > 20:
+                self.state.agent_history.pop(0)
         self.state.messages.append(
             ConversationMessage(
                 type="user", text=text, utterance_id=utterance_id, speaker=speaker
@@ -206,6 +247,14 @@ class SessionRuntime:
 
         if self.should_extract_schema_fields(text, average_confidence):
             await self.extract_and_store_schema_fields(text)
+
+        # Update call stage
+        new_stage = self.detect_call_stage(text, speaker)
+        if new_stage != self.state.call_stage:
+            self.state.call_stage = new_stage
+
+        # Update rolling summary
+        await self.update_rolling_summary(text, speaker)
 
         if speaker == "0":
             if self.conversation_state["pending_question"]:
@@ -233,121 +282,35 @@ class SessionRuntime:
     def should_invoke_llm(
         self, utterance: str, average_confidence: float, speaker: str | None = None
     ) -> bool:
-        if speaker and speaker != "0":
-            return False  # Only invoke for customer (speaker 0)
-
-        normalized = self._normalize_text(utterance)
-        if not normalized:
+        # Smart AI-driven triggers - no hardcoded keywords
+        # Let the LLM decide what's relevant based on conversation context
+        if not utterance or len(utterance.strip()) < 3:
             return False
 
+        # Enforce cooldown
         now = time.monotonic()
         if now - self.last_llm_invoked_at < self.min_llm_interval_seconds:
             return False
 
-        tokens = normalized.split()
-        if len(tokens) <= 2:
+        # Require decent audio quality
+        if average_confidence < 0.5:
             return False
 
-        greeting_phrases = {
-            "hello",
-            "helo",
-            "hi",
-            "hii",
-            "hlo",
-            "alo",
-            "aloo",
-            "haan",
-            "han",
-            "ji",
-            "ji haan",
-            "good morning",
-            "good evening",
-            "namaste",
-            "namaskar",
-            "boliye",
-            "yes",
-            "ok",
-            "okay",
-        }
-        if normalized in greeting_phrases:
+        # Skip exact duplicates
+        normalized = self._normalize_text(utterance)
+        if self._is_duplicate_utterance(normalized):
             return False
 
-        filler_patterns = (
-            "ji haan",
-            "haan ji",
-            "theek hai",
-            "thik hai",
-            "achha",
-            "accha",
-        )
-        if any(normalized == phrase for phrase in filler_patterns):
-            return False
+        # Trigger for any substantive speech - let LLM decide relevance
+        return len(normalized.split()) >= 3
 
-        business_keywords = {
-            "approval",
-            "approved",
-            "loan",
-            "roi",
-            "rate",
-            "interest",
-            "emi",
-            "salary",
-            "income",
-            "property",
-            "builder",
-            "project",
-            "sanction",
-            "disbursement",
-            "disburse",
-            "fee",
-            "fees",
-            "waive",
-            "waiver",
-            "document",
-            "documents",
-            "kyc",
-            "pan",
-            "aadhar",
-            "cibil",
-            "login",
-            "followup",
-            "follow",
-            "bank",
-            "tenure",
-            "eligible",
-            "eligibility",
-            "registration",
-        }
-
-        has_number = any(char.isdigit() for char in utterance)
-        has_business_signal = has_number or any(
-            token in business_keywords for token in tokens
-        )
-
-        if average_confidence < self.min_average_confidence and not has_business_signal:
-            return False
-
-        if len(tokens) < 6 and not has_business_signal:
-            return False
-
-        if len(tokens) < 10 and average_confidence < 0.82 and not has_business_signal:
-            return False
-
-        if self.looks_like_noise_or_filler(normalized):
-            return False
-
-        last_user_text = next(
-            (
-                msg.text
-                for msg in reversed(self.state.messages[:-1])
-                if msg.type == "user"
-            ),
-            "",
-        )
-        if last_user_text and self._normalize_text(last_user_text) == normalized:
-            return False
-
-        return True
+    def _is_duplicate_utterance(self, normalized: str) -> bool:
+        """Check if this is same as last user message"""
+        for msg in reversed(self.state.messages):
+            if msg.type == "user":
+                last_msg = msg.text
+                return bool(last_msg and self._normalize_text(last_msg) == normalized)
+        return False
 
     def should_extract_schema_fields(
         self, utterance: str, average_confidence: float
@@ -548,6 +511,10 @@ class SessionRuntime:
                     utterance,
                     conversation_context,
                     self.gemini_model_override,
+                    customer_last_utterance=self.state.customer_last_utterance,
+                    agent_last_utterance=self.state.agent_last_utterance,
+                    context_summary=conversation_context,
+                    known_entities=self.state.extracted_fields,
                 ):
                     full_text += chunk
                     await self.send_model(
@@ -635,6 +602,82 @@ class SessionRuntime:
             cleaned = f"{cleaned[:117].rstrip()}..."
         return cleaned or "Current customer discussion"
 
+    def detect_call_stage(self, utterance: str, speaker: str | None) -> str:
+        normalized = self._normalize_text(utterance)
+        tokens = set(normalized.split())
+
+        discovery_keywords = {
+            "ki",
+            "kya",
+            "kaise",
+            "konsa",
+            "kaun",
+            "kitna",
+            "inform",
+            "about",
+            "query",
+            "pooch",
+            "pucha",
+        }
+        negotiation_keywords = {
+            "rate",
+            "roi",
+            "interest",
+            "fee",
+            "charges",
+            "waive",
+            "discount",
+            "reduce",
+            "lower",
+            " EMI",
+            " installment",
+        }
+        closing_keywords = {
+            "okay",
+            "thik",
+            "achha",
+            "good",
+            "fine",
+            "process",
+            "apply",
+            "submit",
+            "documents",
+            "disburse",
+            "sanction",
+            "approval",
+        }
+
+        has_discovery = bool(tokens & discovery_keywords)
+        has_negotiation = bool(tokens & negotiation_keywords)
+        has_closing = bool(tokens & closing_keywords)
+
+        if has_closing and self.state.extracted_fields.get("loan_amount"):
+            return "closing"
+        if has_negotiation:
+            return "negotiation"
+        if has_discovery or not self.state.extracted_fields:
+            return "discovery"
+        return self.state.call_stage
+
+    async def update_rolling_summary(self, utterance: str, speaker: str | None) -> None:
+        if not utterance or len(utterance) < 20:
+            return
+        prompt = f"""Summarize this call segment in 1 short line: {utterance[:200]}"""
+        try:
+            summary = await self.gemini.generate_summary(prompt)
+            new_summary = summary.get("summary", "")
+            if new_summary:
+                if self.state.rolling_summary:
+                    self.state.rolling_summary = (
+                        f"{self.state.rolling_summary} | {new_summary}"
+                    )
+                else:
+                    self.state.rolling_summary = new_summary
+                if len(self.state.rolling_summary) > 500:
+                    self.state.rolling_summary = self.state.rolling_summary[-400:]
+        except Exception:
+            pass
+
     def convert_summary_to_hinglish(self, summary: str) -> str:
         lowered = summary.lower()
         replacements = [
@@ -689,17 +732,20 @@ class SessionRuntime:
         self.connection_closed = True
         self._cancel_finalize_task()
 
-        if self.deepgram is not None:
+        # Close all deepgram connections
+        for channel, deepgram in self.deepgrams.items():
             try:
-                await self.deepgram.send_close()
+                await deepgram.send_close()
             except Exception:
                 pass
-            await self.deepgram.close()
-            self.deepgram = None
+            await deepgram.close()
+        self.deepgrams.clear()
 
-        if self.deepgram_task is not None:
-            self.deepgram_task.cancel()
-            self.deepgram_task = None
+        # Cancel all deepgram tasks
+        for task in self.deepgram_tasks.values():
+            if task:
+                task.cancel()
+        self.deepgram_tasks.clear()
 
 
 class SessionManager:
