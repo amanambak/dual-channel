@@ -149,8 +149,13 @@ class SessionRuntime:
                 )
             )
 
+            logger.info(
+                f"Transcript: is_final={is_final}, speaker={speaker}, text={transcript[:50]}"
+            )
+
             if is_final and transcript.strip():
                 confidence = metadata["confidence"]
+                logger.info(f"Capturing segment: confidence={confidence}")
                 if self.should_capture_final_segment(transcript.strip(), confidence):
                     self.state.current_segments.append((transcript.strip(), speaker))
                     self.current_segment_confidences.append(
@@ -196,6 +201,9 @@ class SessionRuntime:
         return primary
 
     async def finalize_utterance(self) -> None:
+        logger.info(
+            f"finalize_utterance: finalized_segments={self.finalized_segments}, current_segments={len(self.state.current_segments)}"
+        )
         if not self.finalized_segments or not self.state.current_segments:
             return
 
@@ -215,9 +223,11 @@ class SessionRuntime:
             text = f"{self.pending_incomplete_utterance} {text}".strip()
             self.pending_incomplete_utterance = ""
 
-        if self.is_incomplete_utterance(text):
-            self.pending_incomplete_utterance = text
-            return
+        # Bypass incomplete check for now - process all speech
+        # if self.is_incomplete_utterance(text):
+        #     self.pending_incomplete_utterance = text
+        #     return
+        pass  # Process immediately
 
         utterance_id = f"utt-{uuid.uuid4().hex[:12]}"
         # Update speaker-specific last utterances and history
@@ -248,6 +258,8 @@ class SessionRuntime:
         if self.should_extract_schema_fields(text, average_confidence):
             await self.extract_and_store_schema_fields(text)
 
+        logger.info(f"ABOUT TO CHECK TRIGGER for: {text[:30]}")
+
         # Update call stage
         new_stage = self.detect_call_stage(text, speaker)
         if new_stage != self.state.call_stage:
@@ -256,6 +268,7 @@ class SessionRuntime:
         # Update rolling summary
         await self.update_rolling_summary(text, speaker)
 
+        # Check schema extraction for customer
         if speaker == "0":
             if self.conversation_state["pending_question"]:
                 parsed = await self.gemini.parse_response(
@@ -275,34 +288,39 @@ class SessionRuntime:
                 )
                 self.conversation_state["pending_question"] = question
 
-        if self.should_invoke_llm(text, average_confidence, speaker):
+        # Smart trigger - invoke for any meaningful speech
+        should_trigger = self.should_invoke_llm(text, average_confidence, speaker)
+        logger.info(
+            f"LLM trigger check: text={text[:30]}, confidence={average_confidence}, speaker={speaker}, triggered={should_trigger}"
+        )
+        if should_trigger:
             self.last_llm_invoked_at = time.monotonic()
             asyncio.create_task(self.generate_ai_response(text, utterance_id))
 
     def should_invoke_llm(
         self, utterance: str, average_confidence: float, speaker: str | None = None
     ) -> bool:
-        # Smart AI-driven triggers - no hardcoded keywords
-        # Let the LLM decide what's relevant based on conversation context
-        if not utterance or len(utterance.strip()) < 3:
+        # Simpler: just trigger on any real speech
+        # Remove all complex checks for debugging
+        if not utterance or len(utterance.strip()) < 2:
             return False
 
-        # Enforce cooldown
-        now = time.monotonic()
-        if now - self.last_llm_invoked_at < self.min_llm_interval_seconds:
-            return False
+        # No cooldown for testing - always trigger
+        # (can add back after confirmed working)
+        # now = time.monotonic()
+        # if now - self.last_llm_invoked_at < self.min_llm_interval_seconds:
+        #     return False
 
-        # Require decent audio quality
-        if average_confidence < 0.5:
-            return False
-
-        # Skip exact duplicates
+        # Basic quality: skip empty/noise
         normalized = self._normalize_text(utterance)
-        if self._is_duplicate_utterance(normalized):
+        if not normalized or len(normalized) < 2:
             return False
 
-        # Trigger for any substantive speech - let LLM decide relevance
-        return len(normalized.split()) >= 3
+        # Always trigger for testing - let LLM filter relevance
+        logger.info(
+            f"TRIGGER: utterance={utterance[:50]}, confidence={average_confidence}"
+        )
+        return True
 
     def _is_duplicate_utterance(self, normalized: str) -> bool:
         """Check if this is same as last user message"""
@@ -475,6 +493,7 @@ class SessionRuntime:
                 self.state.extracted_fields[key] = value
 
     async def generate_ai_response(self, utterance: str, utterance_id: str) -> None:
+        logger.info(f"generate_ai_response CALLED for: {utterance[:50]}")
         async with self.ai_lock:
             if self.conversation_state["pending_question"]:
                 question = self.conversation_state["pending_question"]
@@ -506,6 +525,10 @@ class SessionRuntime:
             full_text = ""
             conversation_context = self.build_recent_conversation_context()
 
+            logger.info(
+                f"Calling Gemini with: utterance={utterance[:50]}, context={conversation_context[:100]}"
+            )
+
             try:
                 async for chunk in self.gemini.stream_reply(
                     utterance,
@@ -525,6 +548,7 @@ class SessionRuntime:
                     )
                     await asyncio.sleep(0.01)
             except Exception as exc:
+                logger.error(f"Gemini error: {exc}")
                 await self.send_model(
                     ErrorEvent(
                         source="Gemini",
