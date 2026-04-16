@@ -39,18 +39,36 @@ async function startCapture(streamId) {
       sampleRate: 16000
     });
 
-    source = audioContext.createMediaStreamSource(mediaStream);
+    // Create the merger gain node
     merger = audioContext.createGain();
-    source.connect(merger);
-    merger.connect(audioContext.destination);
 
-    // Try to add microphone, but continue without if permission denied
+    // Tab audio source
+    source = audioContext.createMediaStreamSource(mediaStream);
+    // Gain node for tab audio to control monitoring volume and feed to merger
+    const tabGain = audioContext.createGain();
+    source.connect(tabGain);
+    // Tab audio to local playback (for monitoring)
+    tabGain.connect(audioContext.destination);
+    // Tab audio to merger (for sending to backend)
+    tabGain.connect(merger);
+
+    // Try to add microphone with echo cancellation and noise suppression
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
       micSource = audioContext.createMediaStreamSource(micStream);
-      micSource.connect(merger);
+      // Gain node for mic audio (we don't want to monitor mic locally to avoid echo)
+      const micGain = audioContext.createGain();
+      micSource.connect(micGain);
+      // Mic audio only to merger (not to local playback)
+      micGain.connect(merger);
     } catch (micErr) {
-      console.warn('Microphone access denied, continuing with tab audio only:', micErr.message);
+      console.warn('Microphone access denied or constraints not supported, continuing with tab audio only:', micErr.message);
       micStream = null;
       micSource = null;
     }
@@ -90,14 +108,24 @@ async function stopCapture() {
     sendInterval = null;
   }
 
+  // Disconnect tab audio nodes
   if (source) {
     source.disconnect();
     source = null;
   }
+  if (tabGain) {
+    tabGain.disconnect();
+    tabGain = null;
+  }
 
+  // Disconnect mic audio nodes
   if (micSource) {
     micSource.disconnect();
     micSource = null;
+  }
+  if (micGain) {
+    micGain.disconnect();
+    micGain = null;
   }
 
   if (merger) {
