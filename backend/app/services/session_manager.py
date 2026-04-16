@@ -476,6 +476,7 @@ class SessionRuntime:
         return ", ".join(f"{key}: {value}" for key, value in items[:limit])
 
     async def extract_and_store_schema_fields(self, utterance: str) -> None:
+        logger.info(f"EXTRACT SCHEMA: utterance={utterance[:50]}")
         conversation_context = self.build_recent_conversation_context()
         try:
             extracted = await self.gemini.extract_schema_values(
@@ -484,6 +485,7 @@ class SessionRuntime:
                 known_fields=self.state.extracted_fields,
                 schema_prompt=self.schema_registry.format_for_prompt(),
             )
+            logger.info(f"EXTRACT RESULT: {extracted}")
         except Exception as exc:
             logger.warning("schema extraction failed: %s", exc)
             return
@@ -491,6 +493,7 @@ class SessionRuntime:
         for key, value in extracted.items():
             if key in self.schema_registry.fields:
                 self.state.extracted_fields[key] = value
+                logger.info(f"STORED: {key}={value}")
 
     async def generate_ai_response(self, utterance: str, utterance_id: str) -> None:
         logger.info(f"generate_ai_response CALLED for: {utterance[:50]}")
