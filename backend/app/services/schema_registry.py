@@ -22,6 +22,8 @@ class SchemaRegistry:
                     meaning = (row.get("Meaning") or "").strip()
                     for field in self._split_field_names(raw_field):
                         fields.setdefault(field, meaning)
+                        if field.startswith("know_"):
+                            fields.setdefault(field, "Known field")
 
         if self.json_path.exists():
             with self.json_path.open("r", encoding="utf-8") as handle:
@@ -52,7 +54,9 @@ class SchemaRegistry:
         return [raw_field]
 
     def format_for_prompt(self) -> str:
-        return "\n".join(f"- {field}: {meaning}" for field, meaning in sorted(self.fields.items()))
+        return "\n".join(
+            f"- {field}: {meaning}" for field, meaning in sorted(self.fields.items())
+        )
 
 
 @lru_cache(maxsize=1)

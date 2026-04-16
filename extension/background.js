@@ -28,6 +28,9 @@ async function saveMessage(message) {
     ...message,
     timestamp: Date.now()
   });
+  if (messages.length > 1000) {
+    messages.shift();
+  }
   await chrome.storage.local.set({ messages });
 }
 

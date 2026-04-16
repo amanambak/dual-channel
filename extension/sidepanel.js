@@ -157,6 +157,10 @@ summaryModal.addEventListener('click', (e) => {
   }
 });
 
+document.getElementById('mic-permission-btn').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
+});
+
 function updateCaptureUI(isActive) {
   if (isActive) {
     toggleBtn.textContent = 'Stop Capture';
@@ -370,6 +374,18 @@ function finalizeAiCard(card) {
     };
     card.element.appendChild(btn);
     card.copyBtn = btn;
+  }
+
+  if (!card.speakBtn && card.content.textContent.includes('Ask:')) {
+    const speakBtn = document.createElement('button');
+    speakBtn.className = 'copy-button';
+    speakBtn.textContent = 'Speak';
+    speakBtn.onclick = () => {
+      const utterance = new SpeechSynthesisUtterance(card.content.textContent.replace('[SUGGESTION] Ask:', '').trim());
+      speechSynthesis.speak(utterance);
+    };
+    card.element.appendChild(speakBtn);
+    card.speakBtn = speakBtn;
   }
 }
 

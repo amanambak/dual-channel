@@ -165,11 +165,20 @@ The extension stores:
 
 This allows the side panel to restore prior chat state and reuse the current backend session summary endpoint when possible.
 
+## Two-Way Conversation Features
+
+- Captures both tab audio (customer) and microphone audio (agent) for mixed stream processing
+- Sends mixed audio to backend for speaker diarization (Deepgram)
+- Displays agent questions as AI suggestions with voice synthesis option
+- Parses customer responses to update `know_` fields like `loan_amount`
+
 ## Current Constraints
 
 - if the backend restarts, stored `currentSessionId` may no longer resolve to an active session
 - summary falls back to ad-hoc extraction when the live session is unavailable
 - audio capture still depends on browser tab audio availability and Chrome offscreen support
+- microphone access requires user permission; falls back to tab-only if denied
+- speaker diarization accuracy depends on audio quality and Deepgram support
 
 ## Related Docs
 

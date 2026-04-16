@@ -93,11 +93,12 @@ The registry is used to constrain customer info extraction so stored keys match 
 
 State stored per session:
 
-- `current_segments`
+- `current_segments` (list of (text, speaker) tuples)
 - `messages`
 - `extracted_fields`
+- `conversation_state` (pending_question for two-way conversation)
 
-`extracted_fields` is the durable in-memory customer-info map for a live session.
+`extracted_fields` is the durable in-memory customer-info map for a live session, including `know_` fields.
 
 ## Transcript Handling Logic
 
@@ -126,6 +127,14 @@ When an utterance finalizes:
 4. schema extraction may run in the background
 5. Gemini suggestion generation may run if gating rules pass
 
+## Two-Way Conversation Logic
+
+- Uses Deepgram speaker diarization to distinguish agent (speaker 1) and customer (speaker 0)
+- Generates agent questions for missing fields (e.g., loan_amount) via Gemini
+- Parses customer responses to extract values and update fields
+- Only processes customer utterances for suggestions and extraction
+- Sends questions as AI suggestions with "Ask:" prefix
+
 ## LLM Invocation Guardrails
 
 The backend prevents unnecessary Gemini calls using:
@@ -136,6 +145,7 @@ The backend prevents unnecessary Gemini calls using:
 - duplicate utterance suppression
 - short non-business utterance suppression
 - incomplete utterance buffering
+- speaker filtering (only customer utterances)
 
 This is why the backend may ignore silence, greetings, or low-quality background transcript fragments.
 
@@ -178,10 +188,13 @@ Used as a fallback when the extension only has stored conversation text and not 
 - If the backend restarts, session-backed summary state is lost
 - Ad-hoc summary can only infer customer info from stored conversation text
 - Deepgram payloads may include non-transcript messages that are skipped
+- Two-way conversation requires diarization; falls back to one-way if unavailable
+- Parsing responses may have accuracy issues for complex inputs
 
 ## Recommended Next Steps
 
 - persist session/customer state in Redis or a database
 - add deterministic extraction for critical fields such as `mobile`, `email`, `loan_amount`, `cibil_score`
 - add structured telemetry for dropped utterances and LLM gating decisions
-- add tests for transcript gating, fallback summary, and schema extraction
+- add tests for transcript gating, fallback summary, schema extraction, and two-way conversation
+- improve speaker diarization accuracy with custom models or post-processing

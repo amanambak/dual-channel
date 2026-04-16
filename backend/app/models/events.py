@@ -8,6 +8,7 @@ class TranscriptEvent(BaseModel):
     transcript: str
     isFinal: bool
     metadata: dict[str, Any] = Field(default_factory=dict)
+    speaker: str | None = None
 
 
 class UtteranceCommittedEvent(BaseModel):

@@ -3,10 +3,15 @@
 
 let audioContext;
 let mediaStream;
+let micStream;
 let source;
+let micSource;
+let merger;
 let workletNode;
 let backendSocket;
 let currentSessionId = null;
+let pcmBuffer = [];
+let sendInterval = null;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'START_CAPTURE' && message.offscreen) {
@@ -35,7 +40,20 @@ async function startCapture(streamId) {
     });
 
     source = audioContext.createMediaStreamSource(mediaStream);
-    source.connect(audioContext.destination);
+    merger = audioContext.createGain();
+    source.connect(merger);
+    merger.connect(audioContext.destination);
+
+    // Try to add microphone, but continue without if permission denied
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micSource = audioContext.createMediaStreamSource(micStream);
+      micSource.connect(merger);
+    } catch (micErr) {
+      console.warn('Microphone access denied, continuing with tab audio only:', micErr.message);
+      micStream = null;
+      micSource = null;
+    }
 
     await openBackendConnection();
     await setupWorklet();
@@ -67,9 +85,24 @@ async function stopCapture() {
     workletNode = null;
   }
 
+  if (sendInterval) {
+    clearInterval(sendInterval);
+    sendInterval = null;
+  }
+
   if (source) {
     source.disconnect();
     source = null;
+  }
+
+  if (micSource) {
+    micSource.disconnect();
+    micSource = null;
+  }
+
+  if (merger) {
+    merger.disconnect();
+    merger = null;
   }
 
   if (audioContext) {
@@ -81,20 +114,36 @@ async function stopCapture() {
     mediaStream.getTracks().forEach((track) => track.stop());
     mediaStream = null;
   }
+
+  if (micStream) {
+    micStream.getTracks().forEach((track) => track.stop());
+    micStream = null;
+  }
 }
 
 async function setupWorklet() {
   await audioContext.audioWorklet.addModule('capture-worklet.js');
   workletNode = new AudioWorkletNode(audioContext, 'capture-worklet');
 
-  workletNode.port.onmessage = (event) => {
-    const pcmBuffer = event.data;
-    if (backendSocket && backendSocket.readyState === WebSocket.OPEN) {
-      backendSocket.send(pcmBuffer);
+  sendInterval = setInterval(() => {
+    if (pcmBuffer.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
+      const totalLength = pcmBuffer.reduce((sum, buf) => sum + buf.byteLength, 0);
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const buf of pcmBuffer) {
+        combined.set(new Uint8Array(buf), offset);
+        offset += buf.byteLength;
+      }
+      backendSocket.send(combined.buffer);
+      pcmBuffer = [];
     }
+  }, 100);
+
+  workletNode.port.onmessage = (event) => {
+    pcmBuffer.push(event.data);
   };
 
-  source.connect(workletNode);
+  merger.connect(workletNode);
 }
 
 function openBackendConnection() {
@@ -105,10 +154,13 @@ function openBackendConnection() {
     let opened = false;
 
     socket.onopen = () => {
+      const params = CONFIG.DEEPGRAM_PARAMS || {};
+      params.diarize = params.diarize || 'true';
+      params.diarize_version = params.diarize_version || '2023-03-31';
       socket.send(JSON.stringify({
         type: 'start_session',
         config: {
-          deepgramParams: CONFIG.DEEPGRAM_PARAMS || {},
+          deepgramParams: params,
           geminiModel: CONFIG.GEMINI_MODEL || null
         }
       }));

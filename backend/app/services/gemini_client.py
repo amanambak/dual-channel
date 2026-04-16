@@ -59,7 +59,9 @@ class GeminiClient:
     def _should_retry(self, exc: Exception) -> bool:
         if isinstance(exc, httpx.HTTPStatusError):
             return exc.response.status_code in {429, 500, 502, 503, 504}
-        return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+        return isinstance(
+            exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+        )
 
     async def stream_reply(
         self,
@@ -92,8 +94,12 @@ class GeminiClient:
         attempts = len(self.retry_delays) + 1
         for attempt in range(attempts):
             try:
-                async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
-                    async with client.stream("POST", url, params=params, json=payload) as response:
+                async with httpx.AsyncClient(
+                    timeout=self.settings.request_timeout_seconds
+                ) as client:
+                    async with client.stream(
+                        "POST", url, params=params, json=payload
+                    ) as response:
                         response.raise_for_status()
                         async for line in response.aiter_lines():
                             if not line or not line.startswith("data: "):
@@ -118,13 +124,7 @@ class GeminiClient:
         params = {"key": self.settings.gemini_api_key}
         payload = {
             "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": SUMMARY_PROMPT.format(conversation=conversation)
-                        }
-                    ]
-                }
+                {"parts": [{"text": SUMMARY_PROMPT.format(conversation=conversation)}]}
             ]
         }
 
@@ -176,17 +176,7 @@ Available schema fields:
 
         url = f"{self.settings.gemini_base_url}/{self.settings.summary_model}:generateContent"
         params = {"key": self.settings.gemini_api_key}
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": prompt
-                        }
-                    ]
-                }
-            ]
-        }
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
         data = await self._post_json_with_retry(url, params, payload)
 
@@ -212,11 +202,15 @@ Available schema fields:
             if value is not None and str(value).strip()
         }
 
-    async def _post_json_with_retry(self, url: str, params: dict, payload: dict) -> dict:
+    async def _post_json_with_retry(
+        self, url: str, params: dict, payload: dict
+    ) -> dict:
         attempts = len(self.retry_delays) + 1
         for attempt in range(attempts):
             try:
-                async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
+                async with httpx.AsyncClient(
+                    timeout=self.settings.request_timeout_seconds
+                ) as client:
                     response = await client.post(url, params=params, json=payload)
                     response.raise_for_status()
                     return response.json()
@@ -226,3 +220,60 @@ Available schema fields:
                 await asyncio.sleep(self.retry_delays[attempt])
 
         raise RuntimeError("unreachable")
+
+    async def generate_question(
+        self, missing_fields: list[str], conversation_context: str
+    ) -> str:
+        prompt = f"""You are an AI assistant helping an agent in a home loan call.
+
+Based on the conversation context, generate the next question the agent should ask the customer to gather missing information.
+
+Missing fields: {", ".join(missing_fields)}
+
+Conversation:
+{conversation_context}
+
+Return only the question in natural Hinglish, without quotes.
+"""
+
+        url = f"{self.settings.gemini_base_url}/{self.settings.summary_model}:generateContent"
+        params = {"key": self.settings.gemini_api_key}
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+        data = await self._post_json_with_retry(url, params, payload)
+        text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+        return text.strip()
+
+    async def parse_response(self, utterance: str, question: str) -> dict[str, str]:
+        prompt = f"""Parse the customer's response to extract the requested information.
+
+Question asked: {question}
+
+Customer response: {utterance}
+
+Return JSON with extracted fields, e.g., {{"loan_amount": "1800000"}} if applicable, else {{}}.
+"""
+
+        url = f"{self.settings.gemini_base_url}/{self.settings.summary_model}:generateContent"
+        params = {"key": self.settings.gemini_api_key}
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+        data = await self._post_json_with_retry(url, params, payload)
+        text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1:
+            return {}
+
+        return json.loads(text[start : end + 1])

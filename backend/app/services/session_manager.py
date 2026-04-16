@@ -42,6 +42,9 @@ class SessionRuntime:
         self.last_llm_invoked_at = 0.0
         self.min_llm_interval_seconds = 8.0
         self.min_average_confidence = 0.72
+        self.normalize_regex1 = re.compile(r"\s+")
+        self.normalize_regex2 = re.compile(r"[^a-z0-9 ]+")
+        self.conversation_state = {"pending_question": None}
 
     async def run(self) -> None:
         while True:
@@ -69,7 +72,9 @@ class SessionRuntime:
             self.deepgram = DeepgramClient(params)
             await self.deepgram.connect()
             self.deepgram_task = asyncio.create_task(self.read_deepgram())
-            await self.send_json({"type": "session_started", "sessionId": self.session_id})
+            await self.send_json(
+                {"type": "session_started", "sessionId": self.session_id}
+            )
             return
 
         if message_type == "stop_session":
@@ -85,10 +90,12 @@ class SessionRuntime:
         except Exception as exc:
             if not self.closed:
                 logger.exception("deepgram read failed")
-                await self.send_model(ErrorEvent(
-                    source="Deepgram",
-                    message=str(exc),
-                ))
+                await self.send_model(
+                    ErrorEvent(
+                        source="Deepgram",
+                        message=str(exc),
+                    )
+                )
 
     async def handle_deepgram_message(self, data: dict) -> None:
         alternative = self._extract_primary_alternative(data)
@@ -101,17 +108,24 @@ class SessionRuntime:
 
         if transcript:
             self._cancel_finalize_task()
-            await self.send_model(TranscriptEvent(
-                transcript=transcript,
-                isFinal=is_final,
-                metadata=metadata,
-            ))
+            speaker = alternative.get("speaker")
+            await self.send_model(
+                TranscriptEvent(
+                    transcript=transcript,
+                    isFinal=is_final,
+                    metadata=metadata,
+                    speaker=speaker,
+                )
+            )
 
             if is_final and transcript.strip():
                 confidence = metadata["confidence"]
+                speaker = alternative.get("speaker")
                 if self.should_capture_final_segment(transcript.strip(), confidence):
-                    self.state.current_segments.append(transcript.strip())
-                    self.current_segment_confidences.append(self.normalize_confidence(confidence))
+                    self.state.current_segments.append((transcript.strip(), speaker))
+                    self.current_segment_confidences.append(
+                        self.normalize_confidence(confidence)
+                    )
                     self.finalized_segments = True
                     self._schedule_finalize()
 
@@ -129,17 +143,24 @@ class SessionRuntime:
             channel = channel[0] if channel else {}
 
         if not isinstance(channel, dict):
-            logger.warning("Unexpected Deepgram channel payload type: %s", type(channel).__name__)
+            logger.warning(
+                "Unexpected Deepgram channel payload type: %s", type(channel).__name__
+            )
             return {}
 
         alternatives = channel.get("alternatives", [])
         if not isinstance(alternatives, list):
-            logger.warning("Unexpected Deepgram alternatives payload type: %s", type(alternatives).__name__)
+            logger.warning(
+                "Unexpected Deepgram alternatives payload type: %s",
+                type(alternatives).__name__,
+            )
             return {}
 
         primary = alternatives[0] if alternatives else {}
         if not isinstance(primary, dict):
-            logger.warning("Unexpected Deepgram alternative item type: %s", type(primary).__name__)
+            logger.warning(
+                "Unexpected Deepgram alternative item type: %s", type(primary).__name__
+            )
             return {}
 
         return primary
@@ -148,7 +169,10 @@ class SessionRuntime:
         if not self.finalized_segments or not self.state.current_segments:
             return
 
-        text = " ".join(self.state.current_segments).strip()
+        text = " ".join(seg[0] for seg in self.state.current_segments).strip()
+        speaker = (
+            self.state.current_segments[0][1] if self.state.current_segments else None
+        )
         self.state.current_segments = []
         self.finalized_segments = False
         average_confidence = self.get_average_confidence()
@@ -167,21 +191,51 @@ class SessionRuntime:
 
         utterance_id = f"utt-{uuid.uuid4().hex[:12]}"
         self.state.messages.append(
-            ConversationMessage(type="user", text=text, utterance_id=utterance_id)
+            ConversationMessage(
+                type="user", text=text, utterance_id=utterance_id, speaker=speaker
+            )
         )
-        await self.send_model(UtteranceCommittedEvent(
-            utteranceId=utterance_id,
-            text=text,
-        ))
+        if len(self.state.messages) > 1000:
+            self.state.messages.pop(0)
+        await self.send_model(
+            UtteranceCommittedEvent(
+                utteranceId=utterance_id,
+                text=text,
+            )
+        )
 
         if self.should_extract_schema_fields(text, average_confidence):
-            asyncio.create_task(self.extract_and_store_schema_fields(text))
+            await self.extract_and_store_schema_fields(text)
 
-        if self.should_invoke_llm(text, average_confidence):
+        if speaker == "0":
+            if self.conversation_state["pending_question"]:
+                parsed = await self.gemini.parse_response(
+                    text, self.conversation_state["pending_question"]
+                )
+                for k, v in parsed.items():
+                    self.state.extracted_fields[k] = v
+                self.conversation_state["pending_question"] = None
+            missing = [
+                f
+                for f in ["loan_amount", "cibil_score"]
+                if f not in self.state.extracted_fields
+            ]
+            if missing:
+                question = await self.gemini.generate_question(
+                    missing, self.build_recent_conversation_context()
+                )
+                self.conversation_state["pending_question"] = question
+
+        if self.should_invoke_llm(text, average_confidence, speaker):
             self.last_llm_invoked_at = time.monotonic()
             asyncio.create_task(self.generate_ai_response(text, utterance_id))
 
-    def should_invoke_llm(self, utterance: str, average_confidence: float) -> bool:
+    def should_invoke_llm(
+        self, utterance: str, average_confidence: float, speaker: str | None = None
+    ) -> bool:
+        if speaker and speaker != "0":
+            return False  # Only invoke for customer (speaker 0)
+
         normalized = self._normalize_text(utterance)
         if not normalized:
             return False
@@ -195,8 +249,25 @@ class SessionRuntime:
             return False
 
         greeting_phrases = {
-            "hello", "helo", "hi", "hii", "hlo", "alo", "aloo", "haan", "han", "ji", "ji haan",
-            "good morning", "good evening", "namaste", "namaskar", "boliye", "yes", "ok", "okay",
+            "hello",
+            "helo",
+            "hi",
+            "hii",
+            "hlo",
+            "alo",
+            "aloo",
+            "haan",
+            "han",
+            "ji",
+            "ji haan",
+            "good morning",
+            "good evening",
+            "namaste",
+            "namaskar",
+            "boliye",
+            "yes",
+            "ok",
+            "okay",
         }
         if normalized in greeting_phrases:
             return False
@@ -213,14 +284,45 @@ class SessionRuntime:
             return False
 
         business_keywords = {
-            "approval", "approved", "loan", "roi", "rate", "interest", "emi", "salary", "income",
-            "property", "builder", "project", "sanction", "disbursement", "disburse", "fee", "fees",
-            "waive", "waiver", "document", "documents", "kyc", "pan", "aadhar", "cibil", "login",
-            "followup", "follow", "bank", "tenure", "eligible", "eligibility", "registration",
+            "approval",
+            "approved",
+            "loan",
+            "roi",
+            "rate",
+            "interest",
+            "emi",
+            "salary",
+            "income",
+            "property",
+            "builder",
+            "project",
+            "sanction",
+            "disbursement",
+            "disburse",
+            "fee",
+            "fees",
+            "waive",
+            "waiver",
+            "document",
+            "documents",
+            "kyc",
+            "pan",
+            "aadhar",
+            "cibil",
+            "login",
+            "followup",
+            "follow",
+            "bank",
+            "tenure",
+            "eligible",
+            "eligibility",
+            "registration",
         }
 
         has_number = any(char.isdigit() for char in utterance)
-        has_business_signal = has_number or any(token in business_keywords for token in tokens)
+        has_business_signal = has_number or any(
+            token in business_keywords for token in tokens
+        )
 
         if average_confidence < self.min_average_confidence and not has_business_signal:
             return False
@@ -235,7 +337,11 @@ class SessionRuntime:
             return False
 
         last_user_text = next(
-            (msg.text for msg in reversed(self.state.messages[:-1]) if msg.type == "user"),
+            (
+                msg.text
+                for msg in reversed(self.state.messages[:-1])
+                if msg.type == "user"
+            ),
             "",
         )
         if last_user_text and self._normalize_text(last_user_text) == normalized:
@@ -243,13 +349,17 @@ class SessionRuntime:
 
         return True
 
-    def should_extract_schema_fields(self, utterance: str, average_confidence: float) -> bool:
+    def should_extract_schema_fields(
+        self, utterance: str, average_confidence: float
+    ) -> bool:
         normalized = self._normalize_text(utterance)
         if not normalized or average_confidence < 0.6:
             return False
         return len(normalized.split()) >= 4 or any(char.isdigit() for char in utterance)
 
-    def should_capture_final_segment(self, transcript: str, confidence: float | None) -> bool:
+    def should_capture_final_segment(
+        self, transcript: str, confidence: float | None
+    ) -> bool:
         normalized = self._normalize_text(transcript)
         if not normalized:
             return False
@@ -263,8 +373,24 @@ class SessionRuntime:
 
     def looks_like_noise_or_filler(self, normalized: str) -> bool:
         filler_only = {
-            "hmm", "hmmm", "uh", "umm", "um", "ji", "haan", "han", "hello", "helo", "hi", "ok", "okay",
-            "acha", "achha", "accha", "bolo", "boliye",
+            "hmm",
+            "hmmm",
+            "uh",
+            "umm",
+            "um",
+            "ji",
+            "haan",
+            "han",
+            "hello",
+            "helo",
+            "hi",
+            "ok",
+            "okay",
+            "acha",
+            "achha",
+            "accha",
+            "bolo",
+            "boliye",
         }
         tokens = normalized.split()
         if not tokens:
@@ -284,7 +410,9 @@ class SessionRuntime:
     def get_average_confidence(self) -> float:
         if not self.current_segment_confidences:
             return 0.75
-        return sum(self.current_segment_confidences) / len(self.current_segment_confidences)
+        return sum(self.current_segment_confidences) / len(
+            self.current_segment_confidences
+        )
 
     def is_incomplete_utterance(self, utterance: str) -> bool:
         normalized = self._normalize_text(utterance)
@@ -292,11 +420,34 @@ class SessionRuntime:
             return False
 
         trailing_phrases = (
-            "to", "toh", "ki", "aur", "or", "par", "lekin", "magar", "kyunki", "kyuki",
-            "jaise", "aapne", "maine", "humne", "usme", "usmein", "isme", "ismein",
-            "phir", "fir", "then", "matlab", "because",
+            "to",
+            "toh",
+            "ki",
+            "aur",
+            "or",
+            "par",
+            "lekin",
+            "magar",
+            "kyunki",
+            "kyuki",
+            "jaise",
+            "aapne",
+            "maine",
+            "humne",
+            "usme",
+            "usmein",
+            "isme",
+            "ismein",
+            "phir",
+            "fir",
+            "then",
+            "matlab",
+            "because",
         )
-        return any(normalized.endswith(f" {phrase}") or normalized == phrase for phrase in trailing_phrases)
+        return any(
+            normalized.endswith(f" {phrase}") or normalized == phrase
+            for phrase in trailing_phrases
+        )
 
     async def _debounced_finalize(self) -> None:
         try:
@@ -315,8 +466,8 @@ class SessionRuntime:
         self.finalize_task = None
 
     def _normalize_text(self, text: str) -> str:
-        normalized = re.sub(r"\s+", " ", text.lower()).strip()
-        normalized = re.sub(r"[^a-z0-9 ]+", "", normalized)
+        normalized = self.normalize_regex1.sub(" ", text.lower()).strip()
+        normalized = self.normalize_regex2.sub("", normalized)
         return normalized.strip()
 
     def build_recent_conversation_context(self, limit: int = 8) -> str:
@@ -328,8 +479,13 @@ class SessionRuntime:
             lines.append(f"Known customer fields: {known_fields_text}")
 
         for msg in recent_messages:
-            speaker = "Customer" if msg.type == "user" else "Caller Assist"
-            lines.append(f"{speaker}: {msg.text}")
+            role = "Customer" if msg.type == "user" else "Caller Assist"
+            if msg.speaker:
+                if msg.speaker == "0":
+                    role = "Customer"
+                elif msg.speaker == "1":
+                    role = "Agent"
+            lines.append(f"{role}: {msg.text}")
         return "\n".join(lines) if lines else "No prior conversation context available."
 
     def build_known_fields_text(self, limit: int = 8) -> str:
@@ -357,6 +513,33 @@ class SessionRuntime:
 
     async def generate_ai_response(self, utterance: str, utterance_id: str) -> None:
         async with self.ai_lock:
+            if self.conversation_state["pending_question"]:
+                question = self.conversation_state["pending_question"]
+                self.conversation_state["pending_question"] = None
+                full_text = f"[SUGGESTION] Ask: {question}"
+                await self.send_model(
+                    AIChunkEvent(
+                        utteranceId=utterance_id,
+                        text=full_text,
+                    )
+                )
+                self.state.messages.append(
+                    ConversationMessage(
+                        type="ai",
+                        text=full_text,
+                        utterance_id=utterance_id,
+                        badge_type="suggestion",
+                    )
+                )
+                await self.send_model(
+                    AIDoneEvent(
+                        utteranceId=utterance_id,
+                        fullText=full_text,
+                        badgeType="suggestion",
+                    )
+                )
+                return
+
             full_text = ""
             conversation_context = self.build_recent_conversation_context()
 
@@ -367,15 +550,20 @@ class SessionRuntime:
                     self.gemini_model_override,
                 ):
                     full_text += chunk
-                    await self.send_model(AIChunkEvent(
-                        utteranceId=utterance_id,
-                        text=chunk,
-                    ))
+                    await self.send_model(
+                        AIChunkEvent(
+                            utteranceId=utterance_id,
+                            text=chunk,
+                        )
+                    )
+                    await asyncio.sleep(0.01)
             except Exception as exc:
-                await self.send_model(ErrorEvent(
-                    source="Gemini",
-                    message=str(exc),
-                ))
+                await self.send_model(
+                    ErrorEvent(
+                        source="Gemini",
+                        message=str(exc),
+                    )
+                )
                 return
 
             full_text = self.normalize_ai_response(full_text, utterance)
@@ -387,23 +575,31 @@ class SessionRuntime:
                     badge_type="suggestion",
                 )
             )
-            await self.send_model(AIDoneEvent(
-                utteranceId=utterance_id,
-                fullText=full_text,
-                badgeType="suggestion",
-            ))
+            await self.send_model(
+                AIDoneEvent(
+                    utteranceId=utterance_id,
+                    fullText=full_text,
+                    badgeType="suggestion",
+                )
+            )
 
     def normalize_ai_response(self, raw_text: str, utterance: str) -> str:
         text = re.sub(r"\s+", " ", raw_text).strip()
 
-        summary_match = re.search(r"\[SUMMARY\](.*?)(?=\[SUGGESTION\]|$)", text, re.IGNORECASE)
+        summary_match = re.search(
+            r"\[SUMMARY\](.*?)(?=\[SUGGESTION\]|$)", text, re.IGNORECASE
+        )
         suggestion_match = re.search(r"\[SUGGESTION\](.*)$", text, re.IGNORECASE)
 
         summary = summary_match.group(1).strip() if summary_match else ""
         suggestion = suggestion_match.group(1).strip() if suggestion_match else ""
 
-        summary = re.sub(r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", summary, flags=re.IGNORECASE).strip()
-        suggestion = re.sub(r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", suggestion, flags=re.IGNORECASE).strip()
+        summary = re.sub(
+            r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", summary, flags=re.IGNORECASE
+        ).strip()
+        suggestion = re.sub(
+            r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", suggestion, flags=re.IGNORECASE
+        ).strip()
 
         if summary and summary.lower().startswith("context:"):
             summary = summary[8:].strip()
@@ -466,8 +662,12 @@ class SessionRuntime:
             updated = re.sub(source, target, updated, flags=re.IGNORECASE)
 
         if updated == summary:
-            updated = re.sub(r"^\s*customer\s+", "", updated, flags=re.IGNORECASE).strip()
-            updated = re.sub(r"^\s*customer\b", "", updated, flags=re.IGNORECASE).strip(" :-")
+            updated = re.sub(
+                r"^\s*customer\s+", "", updated, flags=re.IGNORECASE
+            ).strip()
+            updated = re.sub(r"^\s*customer\b", "", updated, flags=re.IGNORECASE).strip(
+                " :-"
+            )
 
         return updated
 
