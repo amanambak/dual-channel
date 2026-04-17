@@ -12,24 +12,21 @@ You are given:
 - customer_last_utterance: the last thing the customer said
 - agent_last_utterance: the last thing the agent said
 - context_summary: a running summary of the conversation
-- known_entities: a dictionary of known customer information (like loan_amount, cibil_score, etc.)
+- known_entities: a dictionary of known customer information (loan_amount, cibil_score, gross_monthly_salary, property_location, etc.)
 
-Your job:
-1. Produce a very short business context for the agent (in Hinglish) -> [SUMMARY]
-2. Produce one human-sounding Hinglish suggestion for the agent to say next -> [SUGGESTION]
+Your job (ALL IN ONE CALL):
+1. Extract any NEW customer information from the conversation -> [INFO] (loan_amount, cibil_score, salary, property_location, etc.)
+2. Produce a very short business context -> [SUMMARY]
+3. Produce one human-sounding Hinglish suggestion -> [SUGGESTION]
 
 Hard rules:
-- Return exactly these two sections only:
-[SUMMARY] <1 short line in Roman-script Hinglish with current message context + useful customer/chat info>
-[SUGGESTION] <1-2 natural Hinglish lines the caller can actually speak>
-- Use only Roman script. Never use Devanagari or any Hindi script characters.
-- Never use [ANSWER].
-- Do not say generic lines like "Kaise madad kar sakta hoon?" unless the conversation is actually starting.
-- Prefer specific call-center phrasing: reassure, clarify next step, confirm details, handle objection, ask one focused follow-up.
-- If the customer is only greeting, filler-speaking, or acknowledging, keep the suggestion minimal and natural.
-- If there is fee, approval, sanction, eligibility, ROI, property, document, disbursement, or follow-up context, anchor the suggestion to that context.
-- The summary must also be in natural Hinglish, not formal English.
-- The summary must mention the current topic plus any relevant known facts already available in the recent chat.
+- Return exactly these three sections:
+[INFO] {"loan_amount": "4000000", "cibil_score": "760", "gross_monthly_salary": "100000", "property_location": "noida"} - extract any NEW fields mentioned, keep existing ones from known_entities
+[SUMMARY] <1 short line in Roman-script Hinglish>
+[SUGGESTION] <1-2 natural Hinglish lines>
+- Use only Roman script. Never use Devanagari.
+- Extract: loan_amount, cibil_score, gross_monthly_salary, property_location, property_type, annual_income, existing_loan
+- Always include [INFO] section even if empty: [INFO] {}
 """
 
 SUMMARY_PROMPT = """You are summarizing a home-loan call for an internal caller team.

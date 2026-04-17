@@ -580,6 +580,18 @@ class SessionRuntime:
     def normalize_ai_response(self, raw_text: str, utterance: str) -> str:
         text = re.sub(r"\s+", " ", raw_text).strip()
 
+        # Extract INFO (known entities) - NEW SECTION
+        info_match = re.search(r"\[INFO\]({.*?})", text, re.IGNORECASE)
+        if info_match:
+            try:
+                info_json = json.loads(info_match.group(1))
+                for key, value in info_json.items():
+                    if value:
+                        self.state.extracted_fields[key] = str(value)
+                        logger.info(f"EXTRACTED FIELD: {key}={value}")
+            except:
+                pass
+
         summary_match = re.search(
             r"\[SUMMARY\](.*?)(?=\[SUGGESTION\]|$)", text, re.IGNORECASE
         )
@@ -589,10 +601,16 @@ class SessionRuntime:
         suggestion = suggestion_match.group(1).strip() if suggestion_match else ""
 
         summary = re.sub(
-            r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", summary, flags=re.IGNORECASE
+            r"\[/?SUMMARY\]|\[/?SUGGESTION\]|\[/?INFO\]",
+            "",
+            summary,
+            flags=re.IGNORECASE,
         ).strip()
         suggestion = re.sub(
-            r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", suggestion, flags=re.IGNORECASE
+            r"\[/?SUMMARY\]|\[/?SUGGESTION\]|\[/?INFO\]",
+            "",
+            suggestion,
+            flags=re.IGNORECASE,
         ).strip()
 
         if summary and summary.lower().startswith("context:"):
@@ -619,7 +637,7 @@ class SessionRuntime:
 
         response = f"[SUMMARY] {summary}\n"
         if customer_info:
-            response += f"[CUSTOMER_INFO] {customer_info}\n"
+            response += f"[INFO] {customer_info}\n"
         response += f"[SUGGESTION] {suggestion}"
         return response
 

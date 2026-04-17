@@ -334,8 +334,10 @@ function replaceAiCardWithFinalText(card, finalText) {
 
 function parseAiSections(text) {
   const normalized = (text || '').replace(/\s+/g, ' ').trim();
-  const summaryMatch = normalized.match(/\[SUMMARY\](.*?)(?=\[CUSTOMER_INFO\]|\[SUGGESTION\]|\[ANSWER\]|$)/i);
-  const customerInfoMatch = normalized.match(/\[CUSTOMER_INFO\](.*?)(?=\[SUGGESTION\]|\[ANSWER\]|$)/i);
+  const summaryMatch = normalized.match(/\[SUMMARY\](.*?)(?=\[INFO\]|\[CUSTOMER_INFO\]|\[SUGGESTION\]|\[ANSWER\]|$)/i);
+  // Support both [INFO] and [CUSTOMER_INFO]
+  const customerInfoMatch = normalized.match(/\[INFO\](.*?)(?=\[CUSTOMER_INFO\]|\[SUGGESTION\]|\[ANSWER\]|$)/i)
+    || normalized.match(/\[CUSTOMER_INFO\](.*?)(?=\[SUGGESTION\]|\[ANSWER\]|$)/i);
   const suggestionMatch = normalized.match(/\[(?:SUGGESTION|ANSWER)\](.*)$/i);
 
   let summary = summaryMatch ? summaryMatch[1].trim() : '';
@@ -343,7 +345,7 @@ function parseAiSections(text) {
   let suggestion = suggestionMatch ? suggestionMatch[1].trim() : normalized;
 
   summary = summary.replace(/^context:\s*/i, '').replace(/^topic:\s*/i, '').trim();
-  customerInfo = customerInfo.replace(/^customer info:\s*/i, '').trim();
+  customerInfo = customerInfo.replace(/^(customer\s*info:\s*|info:\s*)/i, '').trim();
   suggestion = suggestion.replace(/^suggestion:\s*/i, '').replace(/^answer:\s*/i, '').replace(/^topic:\s*/i, '').trim();
 
   if (summary && suggestion.startsWith(summary)) {
