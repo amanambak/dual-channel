@@ -26,10 +26,10 @@ class SessionRuntime:
         self.websocket = websocket
         self.session_id = str(uuid.uuid4())
         self.state = SessionState(session_id=self.session_id)
-        self.deepgram: DeepgramClient | None = None
+        self.deepgrams: dict[str, DeepgramClient] = {}
         self.gemini = GeminiClient()
         self.schema_registry = get_schema_registry()
-        self.deepgram_task: asyncio.Task | None = None
+        self.deepgram_tasks: dict[str, asyncio.Task] = {}
         self.ai_lock = asyncio.Lock()
         self.closed = False
         self.connection_closed = False
@@ -57,8 +57,19 @@ class SessionRuntime:
                 await self.handle_text_message(text)
 
             if data := message.get("bytes"):
-                if self.deepgram is not None:
-                    await self.deepgram.send_audio(data)
+                # Parse channel from first byte
+                # data format: [channel_byte][audio_data...]
+                if len(data) > 1:
+                    channel_byte = data[0]
+                    channel = "customer" if channel_byte == 0 else "agent"
+                    audio_data = data[1:]
+                else:
+                    channel = "customer"
+                    audio_data = data
+
+                deepgram = self.deepgrams.get(channel)
+                if deepgram:
+                    await deepgram.send_audio(bytes(audio_data))
 
     async def handle_text_message(self, raw_message: str) -> None:
         data = json.loads(raw_message)
@@ -68,10 +79,18 @@ class SessionRuntime:
             config = data.get("config", {})
             params = dict(config.get("deepgramParams") or {})
             params.setdefault("interim_results", "true")
+            # Enable multichannel if not already set
+            params.setdefault("multichannel", "true")
             self.gemini_model_override = config.get("geminiModel")
-            self.deepgram = DeepgramClient(params)
-            await self.deepgram.connect()
-            self.deepgram_task = asyncio.create_task(self.read_deepgram())
+
+            # Create deepgram clients for each channel
+            channels = config.get("channels", ["customer", "agent"])
+            for ch in channels:
+                dg = DeepgramClient(params)
+                await dg.connect()
+                self.deepgrams[ch] = dg
+                self.deepgram_tasks[ch] = asyncio.create_task(self.read_deepgram(ch))
+
             await self.send_json(
                 {"type": "session_started", "sessionId": self.session_id}
             )
@@ -80,16 +99,20 @@ class SessionRuntime:
         if message_type == "stop_session":
             await self.close()
 
-    async def read_deepgram(self) -> None:
-        assert self.deepgram is not None
+    async def read_deepgram(self, channel: str) -> None:
+        deepgram = self.deepgrams.get(channel)
+        if not deepgram:
+            return
         try:
             while True:
-                raw_message = await self.deepgram.recv()
+                raw_message = await deepgram.recv()
                 data = json.loads(raw_message)
+                # Add channel info to the data
+                data["channel_id"] = channel
                 await self.handle_deepgram_message(data)
         except Exception as exc:
             if not self.closed:
-                logger.exception("deepgram read failed")
+                logger.exception(f"deepgram read failed for channel {channel}")
                 await self.send_model(
                     ErrorEvent(
                         source="Deepgram",
@@ -101,14 +124,22 @@ class SessionRuntime:
         alternative = self._extract_primary_alternative(data)
         transcript = alternative.get("transcript", "")
         is_final = data.get("is_final", False)
+
+        # Get channel_id from data (set in read_deepgram)
+        channel_id = data.get("channel_id", "customer")
+
+        # Map channel to speaker
+        speaker_map = {"customer": "0", "agent": "1", "0": "0", "1": "1"}
+        speaker = speaker_map.get(channel_id, "0")
+
         metadata = {
             "confidence": alternative.get("confidence"),
             "speech_final": data.get("speech_final", False),
+            "channel": channel_id,
         }
 
         if transcript:
             self._cancel_finalize_task()
-            speaker = alternative.get("speaker")
             await self.send_model(
                 TranscriptEvent(
                     transcript=transcript,
@@ -118,9 +149,13 @@ class SessionRuntime:
                 )
             )
 
+            logger.info(
+                f"Transcript: is_final={is_final}, speaker={speaker}, text={transcript[:50]}"
+            )
+
             if is_final and transcript.strip():
                 confidence = metadata["confidence"]
-                speaker = alternative.get("speaker")
+                logger.info(f"Capturing segment: confidence={confidence}")
                 if self.should_capture_final_segment(transcript.strip(), confidence):
                     self.state.current_segments.append((transcript.strip(), speaker))
                     self.current_segment_confidences.append(
@@ -166,6 +201,9 @@ class SessionRuntime:
         return primary
 
     async def finalize_utterance(self) -> None:
+        logger.info(
+            f"finalize_utterance: finalized_segments={self.finalized_segments}, current_segments={len(self.state.current_segments)}"
+        )
         if not self.finalized_segments or not self.state.current_segments:
             return
 
@@ -185,11 +223,24 @@ class SessionRuntime:
             text = f"{self.pending_incomplete_utterance} {text}".strip()
             self.pending_incomplete_utterance = ""
 
-        if self.is_incomplete_utterance(text):
-            self.pending_incomplete_utterance = text
-            return
+        # Bypass incomplete check for now - process all speech
+        # if self.is_incomplete_utterance(text):
+        #     self.pending_incomplete_utterance = text
+        #     return
+        pass  # Process immediately
 
         utterance_id = f"utt-{uuid.uuid4().hex[:12]}"
+        # Update speaker-specific last utterances and history
+        if speaker == "0":
+            self.state.customer_last_utterance = text
+            self.state.customer_history.append(text)
+            if len(self.state.customer_history) > 20:
+                self.state.customer_history.pop(0)
+        elif speaker == "1":
+            self.state.agent_last_utterance = text
+            self.state.agent_history.append(text)
+            if len(self.state.agent_history) > 20:
+                self.state.agent_history.pop(0)
         self.state.messages.append(
             ConversationMessage(
                 type="user", text=text, utterance_id=utterance_id, speaker=speaker
@@ -207,6 +258,17 @@ class SessionRuntime:
         if self.should_extract_schema_fields(text, average_confidence):
             await self.extract_and_store_schema_fields(text)
 
+        logger.info(f"ABOUT TO CHECK TRIGGER for: {text[:30]}")
+
+        # Update call stage
+        new_stage = self.detect_call_stage(text, speaker)
+        if new_stage != self.state.call_stage:
+            self.state.call_stage = new_stage
+
+        # Update rolling summary
+        await self.update_rolling_summary(text, speaker)
+
+        # Check schema extraction for customer
         if speaker == "0":
             if self.conversation_state["pending_question"]:
                 parsed = await self.gemini.parse_response(
@@ -226,128 +288,47 @@ class SessionRuntime:
                 )
                 self.conversation_state["pending_question"] = question
 
-        if self.should_invoke_llm(text, average_confidence, speaker):
+        # Smart trigger - invoke for any meaningful speech
+        should_trigger = self.should_invoke_llm(text, average_confidence, speaker)
+        logger.info(
+            f"LLM trigger check: text={text[:30]}, confidence={average_confidence}, speaker={speaker}, triggered={should_trigger}"
+        )
+        if should_trigger:
             self.last_llm_invoked_at = time.monotonic()
             asyncio.create_task(self.generate_ai_response(text, utterance_id))
 
     def should_invoke_llm(
         self, utterance: str, average_confidence: float, speaker: str | None = None
     ) -> bool:
-        if speaker and speaker != "0":
-            return False  # Only invoke for customer (speaker 0)
+        # Simpler: just trigger on any real speech
+        # Remove all complex checks for debugging
+        if not utterance or len(utterance.strip()) < 2:
+            return False
 
+        # No cooldown for testing - always trigger
+        # (can add back after confirmed working)
+        # now = time.monotonic()
+        # if now - self.last_llm_invoked_at < self.min_llm_interval_seconds:
+        #     return False
+
+        # Basic quality: skip empty/noise
         normalized = self._normalize_text(utterance)
-        if not normalized:
+        if not normalized or len(normalized) < 2:
             return False
 
-        now = time.monotonic()
-        if now - self.last_llm_invoked_at < self.min_llm_interval_seconds:
-            return False
-
-        tokens = normalized.split()
-        if len(tokens) <= 2:
-            return False
-
-        greeting_phrases = {
-            "hello",
-            "helo",
-            "hi",
-            "hii",
-            "hlo",
-            "alo",
-            "aloo",
-            "haan",
-            "han",
-            "ji",
-            "ji haan",
-            "good morning",
-            "good evening",
-            "namaste",
-            "namaskar",
-            "boliye",
-            "yes",
-            "ok",
-            "okay",
-        }
-        if normalized in greeting_phrases:
-            return False
-
-        filler_patterns = (
-            "ji haan",
-            "haan ji",
-            "theek hai",
-            "thik hai",
-            "achha",
-            "accha",
+        # Always trigger for testing - let LLM filter relevance
+        logger.info(
+            f"TRIGGER: utterance={utterance[:50]}, confidence={average_confidence}"
         )
-        if any(normalized == phrase for phrase in filler_patterns):
-            return False
-
-        business_keywords = {
-            "approval",
-            "approved",
-            "loan",
-            "roi",
-            "rate",
-            "interest",
-            "emi",
-            "salary",
-            "income",
-            "property",
-            "builder",
-            "project",
-            "sanction",
-            "disbursement",
-            "disburse",
-            "fee",
-            "fees",
-            "waive",
-            "waiver",
-            "document",
-            "documents",
-            "kyc",
-            "pan",
-            "aadhar",
-            "cibil",
-            "login",
-            "followup",
-            "follow",
-            "bank",
-            "tenure",
-            "eligible",
-            "eligibility",
-            "registration",
-        }
-
-        has_number = any(char.isdigit() for char in utterance)
-        has_business_signal = has_number or any(
-            token in business_keywords for token in tokens
-        )
-
-        if average_confidence < self.min_average_confidence and not has_business_signal:
-            return False
-
-        if len(tokens) < 6 and not has_business_signal:
-            return False
-
-        if len(tokens) < 10 and average_confidence < 0.82 and not has_business_signal:
-            return False
-
-        if self.looks_like_noise_or_filler(normalized):
-            return False
-
-        last_user_text = next(
-            (
-                msg.text
-                for msg in reversed(self.state.messages[:-1])
-                if msg.type == "user"
-            ),
-            "",
-        )
-        if last_user_text and self._normalize_text(last_user_text) == normalized:
-            return False
-
         return True
+
+    def _is_duplicate_utterance(self, normalized: str) -> bool:
+        """Check if this is same as last user message"""
+        for msg in reversed(self.state.messages):
+            if msg.type == "user":
+                last_msg = msg.text
+                return bool(last_msg and self._normalize_text(last_msg) == normalized)
+        return False
 
     def should_extract_schema_fields(
         self, utterance: str, average_confidence: float
@@ -495,6 +476,7 @@ class SessionRuntime:
         return ", ".join(f"{key}: {value}" for key, value in items[:limit])
 
     async def extract_and_store_schema_fields(self, utterance: str) -> None:
+        logger.info(f"EXTRACT SCHEMA: utterance={utterance[:50]}")
         conversation_context = self.build_recent_conversation_context()
         try:
             extracted = await self.gemini.extract_schema_values(
@@ -503,6 +485,7 @@ class SessionRuntime:
                 known_fields=self.state.extracted_fields,
                 schema_prompt=self.schema_registry.format_for_prompt(),
             )
+            logger.info(f"EXTRACT RESULT: {extracted}")
         except Exception as exc:
             logger.warning("schema extraction failed: %s", exc)
             return
@@ -510,8 +493,10 @@ class SessionRuntime:
         for key, value in extracted.items():
             if key in self.schema_registry.fields:
                 self.state.extracted_fields[key] = value
+                logger.info(f"STORED: {key}={value}")
 
     async def generate_ai_response(self, utterance: str, utterance_id: str) -> None:
+        logger.info(f"generate_ai_response CALLED for: {utterance[:50]}")
         async with self.ai_lock:
             if self.conversation_state["pending_question"]:
                 question = self.conversation_state["pending_question"]
@@ -543,11 +528,19 @@ class SessionRuntime:
             full_text = ""
             conversation_context = self.build_recent_conversation_context()
 
+            logger.info(
+                f"Calling Gemini with: utterance={utterance[:50]}, context={conversation_context[:100]}"
+            )
+
             try:
                 async for chunk in self.gemini.stream_reply(
                     utterance,
                     conversation_context,
                     self.gemini_model_override,
+                    customer_last_utterance=self.state.customer_last_utterance,
+                    agent_last_utterance=self.state.agent_last_utterance,
+                    context_summary=conversation_context,
+                    known_entities=self.state.extracted_fields,
                 ):
                     full_text += chunk
                     await self.send_model(
@@ -558,6 +551,7 @@ class SessionRuntime:
                     )
                     await asyncio.sleep(0.01)
             except Exception as exc:
+                logger.error(f"Gemini error: {exc}")
                 await self.send_model(
                     ErrorEvent(
                         source="Gemini",
@@ -586,6 +580,18 @@ class SessionRuntime:
     def normalize_ai_response(self, raw_text: str, utterance: str) -> str:
         text = re.sub(r"\s+", " ", raw_text).strip()
 
+        # Extract INFO (known entities) - NEW SECTION
+        info_match = re.search(r"\[INFO\]({.*?})", text, re.IGNORECASE)
+        if info_match:
+            try:
+                info_json = json.loads(info_match.group(1))
+                for key, value in info_json.items():
+                    if value:
+                        self.state.extracted_fields[key] = str(value)
+                        logger.info(f"EXTRACTED FIELD: {key}={value}")
+            except:
+                pass
+
         summary_match = re.search(
             r"\[SUMMARY\](.*?)(?=\[SUGGESTION\]|$)", text, re.IGNORECASE
         )
@@ -595,10 +601,16 @@ class SessionRuntime:
         suggestion = suggestion_match.group(1).strip() if suggestion_match else ""
 
         summary = re.sub(
-            r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", summary, flags=re.IGNORECASE
+            r"\[/?SUMMARY\]|\[/?SUGGESTION\]|\[/?INFO\]",
+            "",
+            summary,
+            flags=re.IGNORECASE,
         ).strip()
         suggestion = re.sub(
-            r"\[/?SUMMARY\]|\[/?SUGGESTION\]", "", suggestion, flags=re.IGNORECASE
+            r"\[/?SUMMARY\]|\[/?SUGGESTION\]|\[/?INFO\]",
+            "",
+            suggestion,
+            flags=re.IGNORECASE,
         ).strip()
 
         if summary and summary.lower().startswith("context:"):
@@ -625,7 +637,7 @@ class SessionRuntime:
 
         response = f"[SUMMARY] {summary}\n"
         if customer_info:
-            response += f"[CUSTOMER_INFO] {customer_info}\n"
+            response += f"[INFO] {customer_info}\n"
         response += f"[SUGGESTION] {suggestion}"
         return response
 
@@ -634,6 +646,82 @@ class SessionRuntime:
         if len(cleaned) > 120:
             cleaned = f"{cleaned[:117].rstrip()}..."
         return cleaned or "Current customer discussion"
+
+    def detect_call_stage(self, utterance: str, speaker: str | None) -> str:
+        normalized = self._normalize_text(utterance)
+        tokens = set(normalized.split())
+
+        discovery_keywords = {
+            "ki",
+            "kya",
+            "kaise",
+            "konsa",
+            "kaun",
+            "kitna",
+            "inform",
+            "about",
+            "query",
+            "pooch",
+            "pucha",
+        }
+        negotiation_keywords = {
+            "rate",
+            "roi",
+            "interest",
+            "fee",
+            "charges",
+            "waive",
+            "discount",
+            "reduce",
+            "lower",
+            " EMI",
+            " installment",
+        }
+        closing_keywords = {
+            "okay",
+            "thik",
+            "achha",
+            "good",
+            "fine",
+            "process",
+            "apply",
+            "submit",
+            "documents",
+            "disburse",
+            "sanction",
+            "approval",
+        }
+
+        has_discovery = bool(tokens & discovery_keywords)
+        has_negotiation = bool(tokens & negotiation_keywords)
+        has_closing = bool(tokens & closing_keywords)
+
+        if has_closing and self.state.extracted_fields.get("loan_amount"):
+            return "closing"
+        if has_negotiation:
+            return "negotiation"
+        if has_discovery or not self.state.extracted_fields:
+            return "discovery"
+        return self.state.call_stage
+
+    async def update_rolling_summary(self, utterance: str, speaker: str | None) -> None:
+        if not utterance or len(utterance) < 20:
+            return
+        prompt = f"""Summarize this call segment in 1 short line: {utterance[:200]}"""
+        try:
+            summary = await self.gemini.generate_summary(prompt)
+            new_summary = summary.get("summary", "")
+            if new_summary:
+                if self.state.rolling_summary:
+                    self.state.rolling_summary = (
+                        f"{self.state.rolling_summary} | {new_summary}"
+                    )
+                else:
+                    self.state.rolling_summary = new_summary
+                if len(self.state.rolling_summary) > 500:
+                    self.state.rolling_summary = self.state.rolling_summary[-400:]
+        except Exception:
+            pass
 
     def convert_summary_to_hinglish(self, summary: str) -> str:
         lowered = summary.lower()
@@ -689,17 +777,20 @@ class SessionRuntime:
         self.connection_closed = True
         self._cancel_finalize_task()
 
-        if self.deepgram is not None:
+        # Close all deepgram connections
+        for channel, deepgram in self.deepgrams.items():
             try:
-                await self.deepgram.send_close()
+                await deepgram.send_close()
             except Exception:
                 pass
-            await self.deepgram.close()
-            self.deepgram = None
+            await deepgram.close()
+        self.deepgrams.clear()
 
-        if self.deepgram_task is not None:
-            self.deepgram_task.cancel()
-            self.deepgram_task = None
+        # Cancel all deepgram tasks
+        for task in self.deepgram_tasks.values():
+            if task:
+                task.cancel()
+        self.deepgram_tasks.clear()
 
 
 class SessionManager:

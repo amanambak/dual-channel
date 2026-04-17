@@ -8,28 +8,25 @@ from app.core.config import get_settings
 
 SYSTEM_PROMPT = """You are a real-time copilot for a home-loan caller team in India.
 
-Your output is shown to a human caller agent inside a live calling panel.
-Do not sound like an AI assistant. Do not talk to the customer directly.
-Help the internal caller say the next line in a natural, practical, human way.
+You are given:
+- customer_last_utterance: the last thing the customer said
+- agent_last_utterance: the last thing the agent said
+- context_summary: a running summary of the conversation
+- known_entities: a dictionary of known customer information (loan_amount, cibil_score, gross_monthly_salary, property_location, etc.)
 
-Your job:
-1. Understand the CURRENT customer utterance.
-2. Use available facts from recent conversation history.
-3. Produce a very short business context for the agent.
-4. Produce one human-sounding Hinglish suggestion in Roman script.
+Your job (ALL IN ONE CALL):
+1. Extract any NEW customer information from the conversation -> [INFO] (loan_amount, cibil_score, salary, property_location, etc.)
+2. Produce a very short business context -> [SUMMARY]
+3. Produce one human-sounding Hinglish suggestion -> [SUGGESTION]
 
 Hard rules:
-- Return exactly these two sections only:
-[SUMMARY] <1 short line in Roman-script Hinglish with current message context + useful customer/chat info>
-[SUGGESTION] <1-2 natural Hinglish lines the caller can actually speak>
-- Use only Roman script. Never use Devanagari or any Hindi script characters.
-- Never use [ANSWER].
-- Do not say generic lines like "Kaise madad kar sakta hoon?" unless the conversation is actually starting.
-- Prefer specific call-center phrasing: reassure, clarify next step, confirm details, handle objection, ask one focused follow-up.
-- If the customer is only greeting, filler-speaking, or acknowledging, keep the suggestion minimal and natural.
-- If there is fee, approval, sanction, eligibility, ROI, property, document, disbursement, or follow-up context, anchor the suggestion to that context.
-- The summary must also be in natural Hinglish, not formal English.
-- The summary must mention the current topic plus any relevant known facts already available in the recent chat.
+- Return exactly these three sections:
+[INFO] {"loan_amount": "4000000", "cibil_score": "760", "gross_monthly_salary": "100000", "property_location": "noida"} - extract any NEW fields mentioned, keep existing ones from known_entities
+[SUMMARY] <1 short line in Roman-script Hinglish>
+[SUGGESTION] <1-2 natural Hinglish lines>
+- Use only Roman script. Never use Devanagari.
+- Extract: loan_amount, cibil_score, gross_monthly_salary, property_location, property_type, annual_income, existing_loan
+- Always include [INFO] section even if empty: [INFO] {}
 """
 
 SUMMARY_PROMPT = """You are summarizing a home-loan call for an internal caller team.
@@ -68,6 +65,10 @@ class GeminiClient:
         utterance: str,
         conversation_context: str,
         model_override: str | None = None,
+        customer_last_utterance: str = "",
+        agent_last_utterance: str = "",
+        context_summary: str = "",
+        known_entities: dict | None = None,
     ) -> AsyncIterator[str]:
         model = model_override or self.settings.gemini_model
         url = f"{self.settings.gemini_base_url}/{model}:streamGenerateContent"
@@ -75,6 +76,7 @@ class GeminiClient:
             "alt": "sse",
             "key": self.settings.gemini_api_key,
         }
+        known_entities = known_entities or {}
         payload = {
             "contents": [
                 {
@@ -82,6 +84,10 @@ class GeminiClient:
                         {
                             "text": (
                                 f"{SYSTEM_PROMPT}\n\n"
+                                f"customer_last_utterance: {customer_last_utterance}\n"
+                                f"agent_last_utterance: {agent_last_utterance}\n"
+                                f"context_summary: {context_summary}\n"
+                                f"known_entities: {json.dumps(known_entities)}\n\n"
                                 f"Recent conversation history:\n{conversation_context}\n\n"
                                 f"Current customer utterance:\n{utterance}"
                             )
@@ -92,6 +98,7 @@ class GeminiClient:
         }
 
         attempts = len(self.retry_delays) + 1
+        current_model = model
         for attempt in range(attempts):
             try:
                 async with httpx.AsyncClient(
@@ -115,6 +122,17 @@ class GeminiClient:
                                 yield text
                 return
             except Exception as exc:
+                # If 503 and we haven't tried fallback yet, retry with fallback model
+                if (
+                    attempt == 0
+                    and "503" in str(exc)
+                    and current_model != self.settings.fallback_model
+                ):
+                    model = self.settings.fallback_model
+                    url = (
+                        f"{self.settings.gemini_base_url}/{model}:streamGenerateContent"
+                    )
+                    continue
                 if attempt >= len(self.retry_delays) or not self._should_retry(exc):
                     raise
                 await asyncio.sleep(self.retry_delays[attempt])

@@ -8,7 +8,7 @@
     "tabCapture",
     "offscreen",
     "storage",
-    "scripting",
+    "scripting",  
     "clipboardWrite",
     "sidePanel",
     "contextMenus"

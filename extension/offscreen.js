@@ -1,17 +1,14 @@
 // offscreen.js — Offscreen document
 // Owns tab audio capture and the persistent backend WebSocket session.
+// Supports dual-channel: tab audio (customer) + microphone (agent)
 
 let audioContext;
 let mediaStream;
 let micStream;
 let source;
 let micSource;
-let merger;
-let workletNode;
 let backendSocket;
 let currentSessionId = null;
-let pcmBuffer = [];
-let sendInterval = null;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'START_CAPTURE' && message.offscreen) {
@@ -25,6 +22,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 async function startCapture(streamId) {
   try {
+    // Get tab audio
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
@@ -39,30 +37,110 @@ async function startCapture(streamId) {
       sampleRate: 16000
     });
 
-    source = audioContext.createMediaStreamSource(mediaStream);
-    merger = audioContext.createGain();
-    source.connect(merger);
-    merger.connect(audioContext.destination);
+    // Create gain nodes for each channel
+    const tabGain = audioContext.createGain();
+    const micGain = audioContext.createGain();
 
-    // Try to add microphone, but continue without if permission denied
+    // Tab audio source (channel 0 - customer)
+    source = audioContext.createMediaStreamSource(mediaStream);
+    source.connect(tabGain);
+    // Tab audio to local playback (so agent can hear the customer)
+    tabGain.connect(audioContext.destination);
+
+    // Get microphone (channel 1 - agent)
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
       micSource = audioContext.createMediaStreamSource(micStream);
-      micSource.connect(merger);
+      micSource.connect(micGain);
+      // NOTE: Do NOT connect micGain to audioContext.destination to avoid echo
     } catch (micErr) {
-      console.warn('Microphone access denied, continuing with tab audio only:', micErr.message);
+      console.warn('Microphone access denied:', micErr.message);
       micStream = null;
       micSource = null;
     }
 
     await openBackendConnection();
-    await setupWorklet();
+    await setupDualChannelWorklets(tabGain, micGain);
+
   } catch (err) {
     chrome.runtime.sendMessage({
       type: 'API_ERROR',
       source: 'Offscreen',
       message: `Failed to start audio capture: ${err.message}`
     }).catch(() => {});
+  }
+}
+
+async function setupDualChannelWorklets(tabGain, micGain) {
+  // Worklet for tab audio (channel 0 - customer)
+  await audioContext.audioWorklet.addModule('capture-worklet.js');
+  const workletCustomer = new AudioWorkletNode(audioContext, 'capture-worklet');
+  tabGain.connect(workletCustomer);
+
+  const bufferCustomer = [];
+  workletCustomer.port.onmessage = (event) => {
+    bufferCustomer.push(event.data);
+  };
+
+  // Send interval for customer channel (every 100ms)
+  const sendIntervalCustomer = setInterval(() => {
+    if (bufferCustomer.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
+      const totalLength = bufferCustomer.reduce((sum, buf) => sum + buf.byteLength, 0);
+      if (totalLength > 0) {
+        const combined = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const buf of bufferCustomer) {
+          combined.set(new Uint8Array(buf), offset);
+          offset += buf.byteLength;
+        }
+        // Send customer channel audio with prefix
+        const channelBuffer = new ArrayBuffer(totalLength + 1);
+        const view = new Uint8Array(channelBuffer);
+        view[0] = 0; // Channel 0 = customer
+        view.set(combined, 1);
+        backendSocket.send(channelBuffer);
+        bufferCustomer.length = 0;
+      }
+    }
+  }, 100);
+
+  // Worklet for microphone (channel 1 - agent)
+  if (micGain) {
+    const workletAgent = new AudioWorkletNode(audioContext, 'capture-worklet');
+    micGain.connect(workletAgent);
+
+    const bufferAgent = [];
+    workletAgent.port.onmessage = (event) => {
+      bufferAgent.push(event.data);
+    };
+
+    // Send interval for agent channel (every 100ms)
+    const sendIntervalAgent = setInterval(() => {
+      if (bufferAgent.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
+        const totalLength = bufferAgent.reduce((sum, buf) => sum + buf.byteLength, 0);
+        if (totalLength > 0) {
+          const combined = new Uint8Array(totalLength);
+          let offset = 0;
+          for (const buf of bufferAgent) {
+            combined.set(new Uint8Array(buf), offset);
+            offset += buf.byteLength;
+          }
+          // Send agent channel audio with prefix
+          const channelBuffer = new ArrayBuffer(totalLength + 1);
+          const view = new Uint8Array(channelBuffer);
+          view[0] = 1; // Channel 1 = agent
+          view.set(combined, 1);
+          backendSocket.send(channelBuffer);
+          bufferAgent.length = 0;
+        }
+      }
+    }, 100);
   }
 }
 
@@ -80,29 +158,16 @@ async function stopCapture() {
 
   currentSessionId = null;
 
-  if (workletNode) {
-    workletNode.disconnect();
-    workletNode = null;
-  }
-
-  if (sendInterval) {
-    clearInterval(sendInterval);
-    sendInterval = null;
-  }
-
+  // Disconnect tab audio nodes
   if (source) {
     source.disconnect();
     source = null;
   }
 
+  // Disconnect mic audio nodes
   if (micSource) {
     micSource.disconnect();
     micSource = null;
-  }
-
-  if (merger) {
-    merger.disconnect();
-    merger = null;
   }
 
   if (audioContext) {
@@ -121,31 +186,6 @@ async function stopCapture() {
   }
 }
 
-async function setupWorklet() {
-  await audioContext.audioWorklet.addModule('capture-worklet.js');
-  workletNode = new AudioWorkletNode(audioContext, 'capture-worklet');
-
-  sendInterval = setInterval(() => {
-    if (pcmBuffer.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
-      const totalLength = pcmBuffer.reduce((sum, buf) => sum + buf.byteLength, 0);
-      const combined = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const buf of pcmBuffer) {
-        combined.set(new Uint8Array(buf), offset);
-        offset += buf.byteLength;
-      }
-      backendSocket.send(combined.buffer);
-      pcmBuffer = [];
-    }
-  }, 100);
-
-  workletNode.port.onmessage = (event) => {
-    pcmBuffer.push(event.data);
-  };
-
-  merger.connect(workletNode);
-}
-
 function openBackendConnection() {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(CONFIG.BACKEND_WS_URL);
@@ -157,11 +197,14 @@ function openBackendConnection() {
       const params = CONFIG.DEEPGRAM_PARAMS || {};
       params.diarize = params.diarize || 'true';
       params.diarize_version = params.diarize_version || '2023-03-31';
+      // Enable multichannel for dual-channel support
+      params.multichannel = 'true';
       socket.send(JSON.stringify({
         type: 'start_session',
         config: {
           deepgramParams: params,
-          geminiModel: CONFIG.GEMINI_MODEL || null
+          geminiModel: CONFIG.GEMINI_MODEL || null,
+          channels: ['customer', 'agent']
         }
       }));
       opened = true;
