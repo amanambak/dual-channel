@@ -3,6 +3,7 @@ from urllib.parse import urlencode
 
 import websockets
 from websockets.asyncio.client import ClientConnection
+from websockets.exceptions import ConnectionClosed
 
 from app.core.config import get_settings
 
@@ -26,10 +27,23 @@ class DeepgramClient:
         )
         return self.connection
 
-    async def send_audio(self, payload: bytes) -> None:
+    async def send_audio(self, payload: bytes) -> bool:
         if self.connection is None:
-            return
-        await self.connection.send(payload)
+            return False
+        try:
+            await self.connection.send(payload)
+            return True
+        except ConnectionClosed:
+            return False
+
+    async def send_keepalive(self) -> bool:
+        if self.connection is None:
+            return False
+        try:
+            await self.connection.send(json.dumps({"type": "KeepAlive"}))
+            return True
+        except ConnectionClosed:
+            return False
 
     async def send_close(self) -> None:
         if self.connection is None:

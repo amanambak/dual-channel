@@ -15,10 +15,12 @@ graph TD
     DGA --> DG
     DG --> SM
     SM -->|interim/final transcript events| EXT
-    SM -->|meaningful utterance| GM[GeminiClient]
-    GM --> GAPI[Gemini API]
-    GAPI --> GM
-    GM -->|summary, customer info, suggestion| SM
+    SM -->|meaningful utterance| LG[LangGraph turn graph]
+    LG --> LC[LangChain LLM service]
+    LC --> API2[LLM provider API]
+    API2 --> LC
+    LC -->|summary, customer info, suggestion| LG
+    LG -->|graph output| SM
     SM -->|AI_RESPONSE events| EXT
     SM --> SR[SchemaRegistry]
     SR --> CSV[home_loan_schema.csv]
@@ -49,7 +51,7 @@ graph TD
 - utterance buffering and debounce
 - noise and filler suppression
 - incomplete utterance buffering
-- Gemini invocation rate limiting
+- LLM invocation rate limiting
 - per-session message history
 - per-session `extracted_fields`
 
@@ -65,16 +67,17 @@ Responsibilities:
 - receive transcript payloads
 - close upstream stream cleanly
 
-### 4. Gemini Integration
+### 4. LLM and Graph Layers
 
-- [backend/app/services/gemini_client.py](/home/amanpaswan/Documents/final/backend/app/services/gemini_client.py)
+- [backend/app/llm/service.py](file:///home/amanpaswan/Desktop/dual-channel/backend/app/llm/service.py)
+- [backend/app/graph/](file:///home/amanpaswan/Desktop/dual-channel/backend/app/graph/)
 
 Responsibilities:
 
 - stream live suggestions for finalized utterances
-- retry on `429/500/502/503/504`
-- extract schema-based customer fields
+- extract schema-based customer fields with structured outputs
 - generate ad-hoc structured summary payloads when needed
+- model orchestration as explicit graph nodes and edges
 
 ### 5. Schema Registry
 
@@ -125,19 +128,19 @@ When an utterance finalizes:
 2. incomplete trailing fragments can be held for the next turn
 3. the utterance is stored in session history
 4. schema extraction may run in the background
-5. Gemini suggestion generation may run if gating rules pass
+5. LLM suggestion generation may run if gating rules pass
 
 ## Two-Way Conversation Logic
 
 - Uses Deepgram speaker diarization to distinguish agent (speaker 1) and customer (speaker 0)
-- Generates agent questions for missing fields (e.g., loan_amount) via Gemini
+- Generates agent questions for missing fields (e.g., loan_amount) via the LLM service
 - Parses customer responses to extract values and update fields
 - Only processes customer utterances for suggestions and extraction
 - Sends questions as AI suggestions with "Ask:" prefix
 
 ## LLM Invocation Guardrails
 
-The backend prevents unnecessary Gemini calls using:
+The backend prevents unnecessary LLM calls using:
 
 - minimum interval between LLM calls
 - minimum average confidence threshold

@@ -2,13 +2,13 @@ from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 from fastapi import WebSocket, WebSocketDisconnect
 
-from app.services.gemini_client import GeminiClient
+from app.llm.service import LLMService
 from app.services.session_manager import SessionManager
 from app.services.schema_registry import get_schema_registry
 
 router = APIRouter()
 session_manager = SessionManager()
-gemini_client = GeminiClient()
+llm_service = LLMService()
 schema_registry = get_schema_registry()
 
 
@@ -39,10 +39,11 @@ async def session_summary(session_id: str) -> dict:
 
 @router.post("/api/summary")
 async def ad_hoc_summary(request: SummaryRequest) -> dict:
-    customer_info = await gemini_client.extract_schema_values(
+    customer_info = await llm_service.extract_schema_values(
         utterance=request.conversation,
         conversation_context=request.conversation,
         known_fields={},
+        schema_fields=schema_registry.fields,
         schema_prompt=schema_registry.format_for_prompt(),
     )
     filtered = {
