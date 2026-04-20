@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     deepgram_api_key: str = Field(default="")
     deepgram_ws_url: str = "wss://api.deepgram.com/v1/listen"
     gemini_api_key: str = Field(default="")
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.1-flash-lite-preview"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    summary_model: str = "gemini-2.5-flash"
+    summary_model: str = "gemini-3.1-flash-lite-preview"
     fallback_model: str = "gemini-3.1-flash-lite-preview"
     request_timeout_seconds: float = 60.0
 

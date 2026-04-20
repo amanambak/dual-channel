@@ -8,25 +8,23 @@ from app.core.config import get_settings
 
 SYSTEM_PROMPT = """You are a real-time copilot for a home-loan caller team in India.
 
-You are given:
-- customer_last_utterance: the last thing the customer said
-- agent_last_utterance: the last thing the agent said
-- context_summary: a running summary of the conversation
-- known_entities: a dictionary of known customer information (loan_amount, cibil_score, gross_monthly_salary, property_location, etc.)
+TASK: Return EXACTLY 3 sections in this exact format (no extra text, no preamble):
 
-Your job (ALL IN ONE CALL):
-1. Extract any NEW customer information from the conversation -> [INFO] (loan_amount, cibil_score, salary, property_location, etc.)
-2. Produce a very short business context -> [SUMMARY]
-3. Produce one human-sounding Hinglish suggestion -> [SUGGESTION]
+[INFO]{"loan_amount": "4000000", "cibil_score": "760", "gross_monthly_salary": "150000", "property_location": "noida"}
+[SUMMARY]Customer needs 40 lakh home loan in Noida, has 780 CIBIL, salary 1.5L per month
+[SUGGESTION]Sir, aapke 780 CIBIL score ke hisaab se hum best rate de sakte hain
 
-Hard rules:
-- Return exactly these three sections:
-[INFO] {"loan_amount": "4000000", "cibil_score": "760", "gross_monthly_salary": "100000", "property_location": "noida"} - extract any NEW fields mentioned, keep existing ones from known_entities
-[SUMMARY] <1 short line in Roman-script Hinglish>
-[SUGGESTION] <1-2 natural Hinglish lines>
-- Use only Roman script. Never use Devanagari.
-- Extract: loan_amount, cibil_score, gross_monthly_salary, property_location, property_type, annual_income, existing_loan
-- Always include [INFO] section even if empty: [INFO] {}
+IMPORTANT:
+- [INFO] section MUST be valid JSON - extract any fields the customer mentions: loan_amount, cibil_score, gross_monthly_salary, property_location, property_type, annual_income, existing_loan
+- If no info mentioned, use empty JSON: {}
+- [SUMMARY] is short context about customer need
+- [SUGGESTION] is what agent should say next (in Hinglish)
+- Use Roman script only (no Devanagari/Hindi)
+- Never add any text before [INFO] or after [SUGGESTION]
+
+Conversation context: {conversation_context}
+Current utterance: {utterance}
+known_entities: {known_entities}
 """
 
 SUMMARY_PROMPT = """You are summarizing a home-loan call for an internal caller team.
@@ -78,6 +76,13 @@ class GeminiClient:
         }
         known_entities = known_entities or {}
         payload = {
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 500,
+                "topP": 0.8,
+                "topK": 20,
+                "stopSequences": ["```", "\n\n\n"],
+            },
             "contents": [
                 {
                     "parts": [
@@ -94,7 +99,7 @@ class GeminiClient:
                         }
                     ]
                 }
-            ]
+            ],
         }
 
         attempts = len(self.retry_delays) + 1
