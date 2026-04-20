@@ -40,7 +40,7 @@ class SessionRuntime:
         self.pending_incomplete_utterance = ""
         self.current_segment_confidences: list[float] = []
         self.last_llm_invoked_at = 0.0
-        self.min_llm_interval_seconds = 8.0
+        self.min_llm_interval_seconds = 3.0
         self.min_average_confidence = 0.72
         self.normalize_regex1 = re.compile(r"\s+")
         self.normalize_regex2 = re.compile(r"[^a-z0-9 ]+")
@@ -260,39 +260,27 @@ class SessionRuntime:
 
         logger.info(f"ABOUT TO CHECK TRIGGER for: {text[:30]}")
 
-        # Update call stage
-        new_stage = self.detect_call_stage(text, speaker)
-        if new_stage != self.state.call_stage:
-            self.state.call_stage = new_stage
+        should_trigger = False
+        try:
+            # Update call stage
+            new_stage = self.detect_call_stage(text, speaker)
+            if new_stage != self.state.call_stage:
+                self.state.call_stage = new_stage
 
-        # Update rolling summary
-        await self.update_rolling_summary(text, speaker)
+            # Update rolling summary
+            await self.update_rolling_summary(text, speaker)
 
-        # Check schema extraction for customer
-        if speaker == "0":
-            if self.conversation_state["pending_question"]:
-                parsed = await self.gemini.parse_response(
-                    text, self.conversation_state["pending_question"]
-                )
-                for k, v in parsed.items():
-                    self.state.extracted_fields[k] = v
-                self.conversation_state["pending_question"] = None
-            missing = [
-                f
-                for f in ["loan_amount", "cibil_score"]
-                if f not in self.state.extracted_fields
-            ]
-            if missing:
-                question = await self.gemini.generate_question(
-                    missing, self.build_recent_conversation_context()
-                )
-                self.conversation_state["pending_question"] = question
+            # Check schema extraction for customer (SILENT - no blocking)
+            # Removed blocking async calls here - fields extracted separately
 
-        # Smart trigger - invoke for any meaningful speech
-        should_trigger = self.should_invoke_llm(text, average_confidence, speaker)
-        logger.info(
-            f"LLM trigger check: text={text[:30]}, confidence={average_confidence}, speaker={speaker}, triggered={should_trigger}"
-        )
+            # Smart trigger - invoke for any meaningful speech
+            should_trigger = self.should_invoke_llm(text, average_confidence, speaker)
+            logger.info(
+                f"LLM trigger check: text={text[:30]}, confidence={average_confidence}, speaker={speaker}, triggered={should_trigger}"
+            )
+        except Exception as e:
+            logger.error(f"Error in trigger check: {e}", exc_info=True)
+
         if should_trigger:
             self.last_llm_invoked_at = time.monotonic()
             asyncio.create_task(self.generate_ai_response(text, utterance_id))
@@ -300,26 +288,36 @@ class SessionRuntime:
     def should_invoke_llm(
         self, utterance: str, average_confidence: float, speaker: str | None = None
     ) -> bool:
-        # Simpler: just trigger on any real speech
-        # Remove all complex checks for debugging
+        # Simple trigger - fire for any meaningful customer speech after greeting
         if not utterance or len(utterance.strip()) < 2:
             return False
 
-        # No cooldown for testing - always trigger
-        # (can add back after confirmed working)
-        # now = time.monotonic()
-        # if now - self.last_llm_invoked_at < self.min_llm_interval_seconds:
-        #     return False
-
-        # Basic quality: skip empty/noise
         normalized = self._normalize_text(utterance)
         if not normalized or len(normalized) < 2:
             return False
 
-        # Always trigger for testing - let LLM filter relevance
-        logger.info(
-            f"TRIGGER: utterance={utterance[:50]}, confidence={average_confidence}"
-        )
+        # Enforce cooldown
+        now = time.monotonic()
+        if now - self.last_llm_invoked_at < self.min_llm_interval_seconds:
+            return False
+
+        # Skip very short utterances
+        tokens = normalized.split()
+        if len(tokens) < 2:
+            return False
+
+        # Skip pure single-word greetings
+        if len(tokens) == 1 and normalized in {
+            "hello",
+            "hi",
+            "namaste",
+            "sir",
+            "ok",
+            "hmm",
+        }:
+            return False
+
+        logger.info(f"TRIGGER: utterance={utterance[:30]} => TRUE")
         return True
 
     def _is_duplicate_utterance(self, normalized: str) -> bool:
@@ -560,6 +558,7 @@ class SessionRuntime:
                 )
                 return
 
+            logger.info(f"RAW LLM RESPONSE: {full_text[:500]}")
             full_text = self.normalize_ai_response(full_text, utterance)
             self.state.messages.append(
                 ConversationMessage(
@@ -579,9 +578,11 @@ class SessionRuntime:
 
     def normalize_ai_response(self, raw_text: str, utterance: str) -> str:
         text = re.sub(r"\s+", " ", raw_text).strip()
+        logger.info(f"NORMALIZE INPUT: {text[:200]}")
 
-        # Extract INFO (known entities) - NEW SECTION
+        # Extract INFO (known entities) - NEW Section
         info_match = re.search(r"\[INFO\]({.*?})", text, re.IGNORECASE)
+        logger.info(f"INFO MATCH: {info_match}")
         if info_match:
             try:
                 info_json = json.loads(info_match.group(1))
@@ -596,6 +597,9 @@ class SessionRuntime:
             r"\[SUMMARY\](.*?)(?=\[SUGGESTION\]|$)", text, re.IGNORECASE
         )
         suggestion_match = re.search(r"\[SUGGESTION\](.*)$", text, re.IGNORECASE)
+        logger.info(
+            f"SUMMARY MATCH: {summary_match}, SUGGESTION MATCH: {suggestion_match}"
+        )
 
         summary = summary_match.group(1).strip() if summary_match else ""
         suggestion = suggestion_match.group(1).strip() if suggestion_match else ""
@@ -705,23 +709,18 @@ class SessionRuntime:
         return self.state.call_stage
 
     async def update_rolling_summary(self, utterance: str, speaker: str | None) -> None:
-        if not utterance or len(utterance) < 20:
+        # Skip expensive LLM call - just use simple rolling text for now
+        # Full summary can be generated at end of call
+        if not utterance or len(utterance) < 10:
             return
-        prompt = f"""Summarize this call segment in 1 short line: {utterance[:200]}"""
-        try:
-            summary = await self.gemini.generate_summary(prompt)
-            new_summary = summary.get("summary", "")
-            if new_summary:
-                if self.state.rolling_summary:
-                    self.state.rolling_summary = (
-                        f"{self.state.rolling_summary} | {new_summary}"
-                    )
-                else:
-                    self.state.rolling_summary = new_summary
-                if len(self.state.rolling_summary) > 500:
-                    self.state.rolling_summary = self.state.rolling_summary[-400:]
-        except Exception:
-            pass
+        # Simple approach - just append to rolling context without LLM
+        preview = utterance[:100]
+        if self.state.rolling_summary:
+            self.state.rolling_summary = f"{self.state.rolling_summary} | {preview}"
+        else:
+            self.state.rolling_summary = preview
+        if len(self.state.rolling_summary) > 500:
+            self.state.rolling_summary = self.state.rolling_summary[-400:]
 
     def convert_summary_to_hinglish(self, summary: str) -> str:
         lowered = summary.lower()
