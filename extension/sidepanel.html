@@ -127,6 +127,23 @@
       margin-top: 8px;
       box-shadow: 0 10px 24px rgba(29, 143, 225, 0.24);
     }
+    .mode-btn {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
+      background: linear-gradient(135deg, #334155, #475569);
+      color: #f8fbff;
+      margin-top: 8px;
+      box-shadow: 0 10px 24px rgba(30, 41, 59, 0.28);
+    }
+    .mode-btn:hover {
+      background: linear-gradient(135deg, #3b4a5f, #55677d);
+    }
     .summary-btn:hover {
       background: linear-gradient(135deg, #0f5aa6, #177ecb);
     }
@@ -191,6 +208,30 @@
       box-shadow: var(--shadow);
       word-wrap: break-word;
       animation: cardEnter 240ms ease-out both;
+    }
+    .speaker-tag {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 4px 8px;
+      border-radius: 999px;
+      margin-bottom: 8px;
+      border: 1px solid transparent;
+    }
+    .speaker-tag.customer {
+      color: #a5f3fc;
+      background: rgba(34, 211, 238, 0.14);
+      border-color: rgba(34, 211, 238, 0.28);
+    }
+    .speaker-tag.agent {
+      color: #fdba74;
+      background: rgba(251, 146, 60, 0.14);
+      border-color: rgba(251, 146, 60, 0.28);
+    }
+    .utterance-text {
+      line-height: 1.4;
     }
     .utterance-card.finalized {
       border-left-color: rgba(148, 163, 184, 0.5);
@@ -443,6 +484,7 @@
       </button>
     </div>
     <button id="toggle-btn" class="control-btn">Start Capture</button>
+    <button id="capture-mode-btn" class="mode-btn">Mode: Google Meet</button>
     <button id="summary-btn" class="summary-btn">
       <span id="summary-btn-text">📊 Generate Summary & Insights</span>
     </button>

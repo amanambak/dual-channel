@@ -53,7 +53,7 @@ async def finalize_utterance(session) -> None:
     if len(session.state.messages) > 1000:
         session.state.messages.pop(0)
     await session.send_model(
-        UtteranceCommittedEvent(utteranceId=utterance_id, text=text)
+        UtteranceCommittedEvent(utteranceId=utterance_id, text=text, speaker=speaker)
     )
 
     session.last_should_extract = should_extract_schema_fields(text, average_confidence)
@@ -84,4 +84,3 @@ async def finalize_utterance(session) -> None:
                 should_trigger=should_trigger,
             )
         )
-

@@ -6,6 +6,7 @@ importScripts('config.js');
 let isCapturing = false;
 let targetTabId = null;
 let currentSessionId = null;
+let captureMode = 'gmeet';
 
 async function setCurrentSessionId(sessionId) {
   currentSessionId = sessionId || null;
@@ -68,9 +69,14 @@ chrome.storage.local.get(['currentSessionId'], (result) => {
   currentSessionId = result.currentSessionId || null;
 });
 
+chrome.storage.local.get(['captureMode'], (result) => {
+  captureMode = result.captureMode === 'rtc' ? 'rtc' : 'gmeet';
+});
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ isCapturing: false, messages: [], currentSessionId: null });
+  chrome.storage.local.set({ isCapturing: false, messages: [], currentSessionId: null, captureMode: 'gmeet' });
   isCapturing = false;
+  captureMode = 'gmeet';
 
   chrome.contextMenus.create({
     id: 'start-capture-context',
@@ -88,14 +94,34 @@ chrome.contextMenus.onClicked.addListener((info) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_STATUS') {
     getCurrentSessionId().then((sessionId) => {
-      sendResponse({ active: isCapturing, sessionId });
+      sendResponse({ active: isCapturing, sessionId, captureMode });
     });
     return true;
   }
 
   if (message.type === 'TOGGLE_CAPTURE') {
     handleToggleCapture().then((active) => {
-      sendResponse({ active, sessionId: currentSessionId });
+      sendResponse({ active, sessionId: currentSessionId, captureMode });
+    });
+    return true;
+  }
+
+  if (message.type === 'TOGGLE_CAPTURE_MODE') {
+    if (isCapturing) {
+      sendResponse({
+        success: false,
+        captureMode,
+        error: 'Stop capture before switching mode.'
+      });
+      return false;
+    }
+    captureMode = captureMode === 'rtc' ? 'gmeet' : 'rtc';
+    chrome.storage.local.set({ captureMode }).then(() => {
+      chrome.runtime.sendMessage({
+        type: 'CAPTURE_MODE_CHANGED',
+        captureMode
+      }).catch(() => {});
+      sendResponse({ success: true, captureMode });
     });
     return true;
   }
@@ -193,7 +219,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       type: 'TRANSCRIPT_UPDATE',
       transcript: message.transcript,
       isFinal: message.isFinal,
-      metadata: message.metadata
+      metadata: message.metadata,
+      speaker: message.speaker
     }).catch(() => {});
     return false;
   }
@@ -207,7 +234,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     saveMessage({
       type: 'user',
       text: message.text,
-      utteranceId: message.utteranceId
+      utteranceId: message.utteranceId,
+      speaker: message.speaker || null
     });
     return false;
   }
@@ -273,6 +301,7 @@ async function startCapture() {
       chrome.runtime.sendMessage({
         type: 'START_CAPTURE',
         streamId,
+        captureMode,
         offscreen: true
       }).catch(() => {});
     }, 250);

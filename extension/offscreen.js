@@ -9,10 +9,12 @@ let source;
 let micSource;
 let backendSocket;
 let currentSessionId = null;
+let sendIntervalCustomer = null;
+let sendIntervalAgent = null;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'START_CAPTURE' && message.offscreen) {
-    startCapture(message.streamId);
+    startCapture(message.streamId, message.captureMode);
   } else if (message.type === 'STOP_CAPTURE' && message.offscreen) {
     stopCapture();
   } else if (message.type === 'REQUEST_SUMMARY' && message.offscreen) {
@@ -20,8 +22,11 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-async function startCapture(streamId) {
+async function startCapture(streamId, captureMode = 'gmeet') {
   try {
+    const shouldCaptureMic = captureMode === 'gmeet' || captureMode === 'rtc';
+    let hasMicChannel = false;
+
     // Get tab audio
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -47,26 +52,29 @@ async function startCapture(streamId) {
     // Tab audio to local playback (so agent can hear the customer)
     tabGain.connect(audioContext.destination);
 
-    // Get microphone (channel 1 - agent)
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      micSource = audioContext.createMediaStreamSource(micStream);
-      micSource.connect(micGain);
-      // NOTE: Do NOT connect micGain to audioContext.destination to avoid echo
-    } catch (micErr) {
-      console.warn('Microphone access denied:', micErr.message);
-      micStream = null;
-      micSource = null;
+    if (shouldCaptureMic) {
+      // Get microphone (channel 1 - agent)
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        micSource = audioContext.createMediaStreamSource(micStream);
+        micSource.connect(micGain);
+        hasMicChannel = true;
+        // NOTE: Do NOT connect micGain to audioContext.destination to avoid echo
+      } catch (micErr) {
+        console.warn('Microphone access denied:', micErr.message);
+        micStream = null;
+        micSource = null;
+      }
     }
 
-    await openBackendConnection();
-    await setupDualChannelWorklets(tabGain, micGain);
+    await openBackendConnection(captureMode, hasMicChannel);
+    await setupDualChannelWorklets(tabGain, hasMicChannel ? micGain : null);
 
   } catch (err) {
     chrome.runtime.sendMessage({
@@ -89,7 +97,7 @@ async function setupDualChannelWorklets(tabGain, micGain) {
   };
 
   // Send interval for customer channel (every 100ms)
-  const sendIntervalCustomer = setInterval(() => {
+  sendIntervalCustomer = setInterval(() => {
     if (bufferCustomer.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
       const totalLength = bufferCustomer.reduce((sum, buf) => sum + buf.byteLength, 0);
       if (totalLength > 0) {
@@ -121,7 +129,7 @@ async function setupDualChannelWorklets(tabGain, micGain) {
     };
 
     // Send interval for agent channel (every 100ms)
-    const sendIntervalAgent = setInterval(() => {
+    sendIntervalAgent = setInterval(() => {
       if (bufferAgent.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
         const totalLength = bufferAgent.reduce((sum, buf) => sum + buf.byteLength, 0);
         if (totalLength > 0) {
@@ -145,6 +153,15 @@ async function setupDualChannelWorklets(tabGain, micGain) {
 }
 
 async function stopCapture() {
+  if (sendIntervalCustomer) {
+    clearInterval(sendIntervalCustomer);
+    sendIntervalCustomer = null;
+  }
+  if (sendIntervalAgent) {
+    clearInterval(sendIntervalAgent);
+    sendIntervalAgent = null;
+  }
+
   if (backendSocket) {
     try {
       if (backendSocket.readyState === WebSocket.OPEN) {
@@ -186,7 +203,7 @@ async function stopCapture() {
   }
 }
 
-function openBackendConnection() {
+function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(CONFIG.BACKEND_WS_URL);
     socket.binaryType = 'arraybuffer';
@@ -197,14 +214,14 @@ function openBackendConnection() {
       const params = CONFIG.DEEPGRAM_PARAMS || {};
       params.diarize = params.diarize || 'true';
       params.diarize_version = params.diarize_version || '2023-03-31';
-      // Enable multichannel for dual-channel support
-      params.multichannel = 'true';
+      params.multichannel = hasMicChannel ? 'true' : 'false';
       socket.send(JSON.stringify({
         type: 'start_session',
         config: {
           deepgramParams: params,
           geminiModel: CONFIG.GEMINI_MODEL || null,
-          channels: ['customer', 'agent']
+          captureMode,
+          channels: hasMicChannel ? ['customer', 'agent'] : ['customer']
         }
       }));
       opened = true;
@@ -268,7 +285,8 @@ function handleBackendMessage(message) {
       type: 'TRANSCRIPT_RECEIVED',
       transcript: message.transcript,
       isFinal: message.isFinal,
-      metadata: message.metadata
+      metadata: message.metadata,
+      speaker: message.speaker
     }).catch(() => {});
     return;
   }
@@ -282,7 +300,8 @@ function handleBackendMessage(message) {
     chrome.runtime.sendMessage({
       type: 'UTTERANCE_COMMITTED',
       utteranceId: message.utteranceId,
-      text: message.text
+      text: message.text,
+      speaker: message.speaker
     }).catch(() => {});
     return;
   }

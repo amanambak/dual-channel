@@ -6,6 +6,7 @@ const container = document.getElementById('transcript-container');
 const toggleBtn = document.getElementById('toggle-btn');
 const clearBtn = document.getElementById('clear-btn');
 const dot = document.getElementById('dot');
+const captureModeBtn = document.getElementById('capture-mode-btn');
 const summaryBtn = document.getElementById('summary-btn');
 const summaryModal = document.getElementById('summary-modal');
 const modalClose = document.getElementById('modal-close');
@@ -31,10 +32,11 @@ function renderStoredMessages(messages) {
 }
 
 function renderStoredUtterance(msg) {
-  const card = document.createElement('div');
-  card.className = 'utterance-card finalized';
-  card.textContent = msg.text;
-  container.appendChild(card);
+  const speakerLabel = resolveSpeakerLabel(msg.speaker);
+  const card = createUtteranceCard(`stored-${Date.now()}-${Math.random()}`, speakerLabel);
+  card.stable.textContent = msg.text || '';
+  finalizeCard(card);
+  container.appendChild(card.element);
 }
 
 function renderStoredAiResponse(msg) {
@@ -96,6 +98,7 @@ async function initializePanel() {
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (response) {
       updateCaptureUI(response.active);
+      updateCaptureModeUI(response.captureMode);
     }
   });
 }
@@ -110,6 +113,19 @@ toggleBtn.addEventListener('click', () => {
     if (response) {
       updateCaptureUI(response.active);
     }
+  });
+});
+
+captureModeBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'TOGGLE_CAPTURE_MODE' }, (response) => {
+    if (chrome.runtime.lastError || !response) {
+      return;
+    }
+    if (!response.success) {
+      alert(response.error || 'Unable to switch mode while capture is running.');
+      return;
+    }
+    updateCaptureModeUI(response.captureMode);
   });
 });
 
@@ -173,13 +189,24 @@ function updateCaptureUI(isActive) {
   }
 }
 
+function updateCaptureModeUI(mode) {
+  const isRtcMode = mode === 'rtc';
+  captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'TRANSCRIPT_UPDATE') {
-    const { transcript, isFinal, metadata } = message;
+    const { transcript, isFinal, metadata, speaker } = message;
+    const speakerLabel = resolveSpeakerLabel(speaker, metadata);
 
     if (!currentCard && transcript.trim()) {
       const utteranceId = `u-${Date.now()}`;
-      currentCard = createUtteranceCard(utteranceId);
+      currentCard = createUtteranceCard(utteranceId, speakerLabel);
+      container.appendChild(currentCard.element);
+    } else if (currentCard && transcript.trim() && speakerLabel !== currentCard.speakerLabel) {
+      finalizeCard(currentCard);
+      const utteranceId = `u-${Date.now()}`;
+      currentCard = createUtteranceCard(utteranceId, speakerLabel);
       container.appendChild(currentCard.element);
     }
 
@@ -224,6 +251,10 @@ chrome.runtime.onMessage.addListener((message) => {
     updateCaptureUI(message.active);
   }
 
+  if (message.type === 'CAPTURE_MODE_CHANGED') {
+    updateCaptureModeUI(message.captureMode);
+  }
+
   if (message.type === 'UTTERANCE_END') {
     if (currentCard) {
       finalizeCard(currentCard);
@@ -240,15 +271,22 @@ function scrollToBottom() {
   container.scrollTop = container.scrollHeight;
 }
 
-function createUtteranceCard(id) {
+function createUtteranceCard(id, speakerLabel = 'Customer') {
   const el = document.createElement('div');
   el.className = 'utterance-card';
+  const badge = document.createElement('span');
+  badge.className = `speaker-tag ${speakerLabel === 'Agent' ? 'agent' : 'customer'}`;
+  badge.textContent = speakerLabel;
+  const textWrap = document.createElement('div');
+  textWrap.className = 'utterance-text';
   const stable = document.createElement('span');
   const interim = document.createElement('span');
   interim.style.color = '#888';
-  el.appendChild(stable);
-  el.appendChild(interim);
-  return { element: el, stable, interim, id };
+  textWrap.appendChild(stable);
+  textWrap.appendChild(interim);
+  el.appendChild(badge);
+  el.appendChild(textWrap);
+  return { element: el, stable, interim, id, badge, speakerLabel };
 }
 
 function updateInterimInCard(card, text) {
@@ -270,6 +308,20 @@ function appendFinalToCard(card, text) {
 function finalizeCard(card) {
   card.element.classList.add('finalized');
   card.interim.textContent = '';
+}
+
+function resolveSpeakerLabel(speaker, metadata) {
+  if (speaker === '1') {
+    return 'Agent';
+  }
+  if (speaker === '0') {
+    return 'Customer';
+  }
+  const channel = metadata?.channel;
+  if (channel === 'agent') {
+    return 'Agent';
+  }
+  return 'Customer';
 }
 
 function createAiResponseCard(id) {
