@@ -106,6 +106,12 @@ def should_invoke_llm(
     return True
 
 
+def build_turn_dedupe_key(utterance: str, speaker: str | None) -> str:
+    normalized = normalize_text(utterance)
+    speaker_key = speaker or ""
+    return f"{speaker_key}|{normalized}"
+
+
 def build_known_fields_text(fields: dict[str, str], limit: int = 8) -> str:
     items = list(fields.items())
     if not items:

@@ -16,6 +16,7 @@ class TurnState(TypedDict, total=False):
     customer_last_utterance: str
     agent_last_utterance: str
     context_summary: str
+    last_suggestion: str  # last AI suggestion sent — model must not repeat it
     extracted_fields: dict[str, str]
     raw_response: str
 

@@ -47,7 +47,12 @@ async def run(session) -> None:
 
 
 async def handle_text_message(session, raw_message: str) -> None:
-    data = json.loads(raw_message)
+    try:
+        data = json.loads(raw_message)
+    except json.JSONDecodeError as exc:
+        logger.warning("Received malformed text frame: %s", exc)
+        await session.send_model(ErrorEvent(source="Transport", message=f"Invalid JSON: {exc}"))
+        return
     message_type = data.get("type")
 
     if message_type == "start_session":
@@ -55,6 +60,7 @@ async def handle_text_message(session, raw_message: str) -> None:
         params = dict(config.get("deepgramParams") or {})
         params.setdefault("interim_results", "true")
         params.setdefault("multichannel", "true")
+        params.setdefault("punctuate", "true")
         session.model_override = (
             config.get("modelOverride") or config.get("aiModel") or config.get("geminiModel")
         )

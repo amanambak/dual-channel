@@ -8,20 +8,6 @@ from app.graph.state import TurnState
 from app.llm.service import LLMService
 
 
-def _route_from_start(state: TurnState) -> str:
-    if state.get("should_extract"):
-        return "extract_schema"
-    if state.get("should_trigger"):
-        return "generate_response"
-    return END
-
-
-def _route_after_extract(state: TurnState) -> str:
-    if state.get("should_trigger"):
-        return "generate_response"
-    return END
-
-
 @lru_cache(maxsize=1)
 def get_turn_graph():
     llm = LLMService()
@@ -32,21 +18,15 @@ def get_turn_graph():
     graph.add_node("generate_response", nodes["generate_response"])
     graph.add_conditional_edges(
         START,
-        _route_from_start,
-        {
-            "extract_schema": "extract_schema",
-            "generate_response": "generate_response",
-            END: END,
-        },
+        lambda state: "extract_schema" if state.get("should_extract") else (
+            "generate_response" if state.get("should_trigger") else END
+        ),
+        ["extract_schema", "generate_response", END],
     )
     graph.add_conditional_edges(
         "extract_schema",
-        _route_after_extract,
-        {
-            "generate_response": "generate_response",
-            END: END,
-        },
+        lambda state: "generate_response" if state.get("should_trigger") else END,
+        ["generate_response", END],
     )
     graph.add_edge("generate_response", END)
     return graph.compile(checkpointer=MemorySaver())
-

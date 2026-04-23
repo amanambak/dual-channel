@@ -2,15 +2,16 @@
 
 ## Overview
 
-The backend is a FastAPI service that receives live audio from the extension, streams it to Deepgram, turns final transcript segments into utterances, runs LangChain-based LLM suggestions, and maintains per-session customer info extracted against the home loan schema.
+The backend is a FastAPI service that receives live audio from the extension, streams it to Deepgram, finalizes utterances, runs schema-driven extraction, and emits streaming AI suggestions back to the browser.
 
 ## Current Behavior
 
 - Live audio enters through a browser WebSocket session
 - Deepgram returns interim and final transcript events
+- Deepgram listens with `model=nova-3`, `punctuate=true`, `interim_results=true`, and channel-aware audio
 - Final transcript chunks are buffered briefly, merged, and filtered
-- Low-value or noisy transcript fragments are ignored
-- Meaningful utterances trigger LLM suggestion generation
+- High-confidence local updates seed obvious fields like location, salary, and loan amount before the LLM runs
+- Meaningful utterances trigger schema extraction and then suggestion generation in sequence
 - Customer fields found in conversation are stored using exact schema variable names
 - Session summary returns customer info as key-value pairs
 
@@ -46,19 +47,28 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## LLM Layer
 
-- `backend/app/llm/service.py` contains the single LangChain-based LLM service used by the backend.
-- Use model strings like `gemini-3.1-flash-lite-preview` or `openai:gpt-4o-mini` to switch providers without code changes.
+- `backend/app/llm/service.py` contains the shared LLM service used by the backend.
+- The current live turn graph calls extraction first and response generation second.
+- The raw model output is normalized into `[SUMMARY]`, `[INFO]`, and `[SUGGESTION]` sections before it reaches the extension.
 
 ## Source Files
 
-- [backend/app/main.py](/home/amanpaswan/Documents/final/backend/app/main.py)
-- [backend/app/api/websocket.py](/home/amanpaswan/Documents/final/backend/app/api/websocket.py)
-- [backend/app/services/session_manager.py](/home/amanpaswan/Documents/final/backend/app/services/session_manager.py)
-- [backend/app/services/session_transport.py](/home/amanpaswan/Documents/final/backend/app/services/session_transport.py)
-- [backend/app/services/session_text.py](/home/amanpaswan/Documents/final/backend/app/services/session_text.py)
-- [backend/app/services/session_turn_runner.py](/home/amanpaswan/Documents/final/backend/app/services/session_turn_runner.py)
-- [backend/app/services/session_response.py](/home/amanpaswan/Documents/final/backend/app/services/session_response.py)
-- [backend/app/graph/](file:///home/amanpaswan/Desktop/dual-channel/backend/app/graph/)
-- [backend/app/llm/service.py](file:///home/amanpaswan/Desktop/dual-channel/backend/app/llm/service.py)
-- [backend/app/services/deepgram_client.py](/home/amanpaswan/Documents/final/backend/app/services/deepgram_client.py)
-- [backend/app/services/schema_registry.py](/home/amanpaswan/Documents/final/backend/app/services/schema_registry.py)
+- `backend/app/main.py`
+- `backend/app/api/websocket.py`
+- `backend/app/services/session_manager.py`
+- `backend/app/services/session_transport.py`
+- `backend/app/services/session_finalize.py`
+- `backend/app/services/session_turn_runner.py`
+- `backend/app/services/session_response.py`
+- `backend/app/graph/`
+- `backend/app/llm/service.py`
+- `backend/app/services/deepgram_client.py`
+- `backend/app/services/schema_registry.py`
+- `backend/app/services/schema_normalizer.py`
+
+## Notes
+
+- Session state is in-memory only
+- Deepgram query params are normalized to strings before the WebSocket handshake
+- Punctuation is enabled for readability; smart formatting remains off for lower latency
+- The ad-hoc summary endpoint uses the same schema extraction service as the live session path

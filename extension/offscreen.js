@@ -67,7 +67,16 @@ async function startCapture(streamId, captureMode = 'gmeet') {
         hasMicChannel = true;
         // NOTE: Do NOT connect micGain to audioContext.destination to avoid echo
       } catch (micErr) {
-        console.warn('Microphone access denied:', micErr.message);
+        const isDenied = micErr.name === 'NotAllowedError' || micErr.name === 'PermissionDeniedError';
+        const errorMsg = isDenied
+          ? 'Microphone permission denied. Grant mic access and try again.'
+          : `Microphone unavailable: ${micErr.message}`;
+        console.warn('[offscreen] Mic access failed:', errorMsg);
+        chrome.runtime.sendMessage({
+          type: 'API_ERROR',
+          source: 'Mic',
+          message: errorMsg
+        }).catch(() => {});
         micStream = null;
         micSource = null;
       }
@@ -85,70 +94,56 @@ async function startCapture(streamId, captureMode = 'gmeet') {
   }
 }
 
+/**
+ * Creates a periodic interval that drains an audio buffer and sends it over
+ * the backend WebSocket with a single-byte channel prefix.
+ *
+ * @param {number} channelByte - 0 = customer, 1 = agent
+ * @param {Array}  buffer      - Shared buffer array (mutated in-place)
+ * @param {number} intervalMs  - Polling interval in milliseconds
+ * @returns {number} The interval ID (pass to clearInterval to stop it)
+ */
+function createChannelSender(channelByte, buffer, intervalMs = 100) {
+  return setInterval(() => {
+    if (buffer.length === 0 || !backendSocket || backendSocket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const totalLength = buffer.reduce((sum, buf) => sum + buf.byteLength, 0);
+    if (totalLength === 0) {
+      return;
+    }
+    const combined = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const buf of buffer) {
+      combined.set(new Uint8Array(buf), offset);
+      offset += buf.byteLength;
+    }
+    const channelBuffer = new ArrayBuffer(totalLength + 1);
+    const view = new Uint8Array(channelBuffer);
+    view[0] = channelByte;
+    view.set(combined, 1);
+    backendSocket.send(channelBuffer);
+    buffer.length = 0; // drain in-place
+  }, intervalMs);
+}
+
 async function setupDualChannelWorklets(tabGain, micGain) {
   // Worklet for tab audio (channel 0 - customer)
   await audioContext.audioWorklet.addModule('capture-worklet.js');
+
   const workletCustomer = new AudioWorkletNode(audioContext, 'capture-worklet');
   tabGain.connect(workletCustomer);
-
   const bufferCustomer = [];
-  workletCustomer.port.onmessage = (event) => {
-    bufferCustomer.push(event.data);
-  };
-
-  // Send interval for customer channel (every 100ms)
-  sendIntervalCustomer = setInterval(() => {
-    if (bufferCustomer.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
-      const totalLength = bufferCustomer.reduce((sum, buf) => sum + buf.byteLength, 0);
-      if (totalLength > 0) {
-        const combined = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const buf of bufferCustomer) {
-          combined.set(new Uint8Array(buf), offset);
-          offset += buf.byteLength;
-        }
-        // Send customer channel audio with prefix
-        const channelBuffer = new ArrayBuffer(totalLength + 1);
-        const view = new Uint8Array(channelBuffer);
-        view[0] = 0; // Channel 0 = customer
-        view.set(combined, 1);
-        backendSocket.send(channelBuffer);
-        bufferCustomer.length = 0;
-      }
-    }
-  }, 100);
+  workletCustomer.port.onmessage = (event) => { bufferCustomer.push(event.data); };
+  sendIntervalCustomer = createChannelSender(0, bufferCustomer);
 
   // Worklet for microphone (channel 1 - agent)
   if (micGain) {
     const workletAgent = new AudioWorkletNode(audioContext, 'capture-worklet');
     micGain.connect(workletAgent);
-
     const bufferAgent = [];
-    workletAgent.port.onmessage = (event) => {
-      bufferAgent.push(event.data);
-    };
-
-    // Send interval for agent channel (every 100ms)
-    sendIntervalAgent = setInterval(() => {
-      if (bufferAgent.length > 0 && backendSocket && backendSocket.readyState === WebSocket.OPEN) {
-        const totalLength = bufferAgent.reduce((sum, buf) => sum + buf.byteLength, 0);
-        if (totalLength > 0) {
-          const combined = new Uint8Array(totalLength);
-          let offset = 0;
-          for (const buf of bufferAgent) {
-            combined.set(new Uint8Array(buf), offset);
-            offset += buf.byteLength;
-          }
-          // Send agent channel audio with prefix
-          const channelBuffer = new ArrayBuffer(totalLength + 1);
-          const view = new Uint8Array(channelBuffer);
-          view[0] = 1; // Channel 1 = agent
-          view.set(combined, 1);
-          backendSocket.send(channelBuffer);
-          bufferAgent.length = 0;
-        }
-      }
-    }, 100);
+    workletAgent.port.onmessage = (event) => { bufferAgent.push(event.data); };
+    sendIntervalAgent = createChannelSender(1, bufferAgent);
   }
 }
 

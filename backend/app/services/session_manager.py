@@ -18,6 +18,7 @@ from app.services.session_text import (
     looks_like_noise_or_filler,
     normalize_confidence,
     normalize_text,
+    should_capture_final_segment,
     should_extract_schema_fields,
     should_invoke_llm,
 )
@@ -209,6 +210,12 @@ class SessionRuntime:
 
 
 class SessionManager:
+    """Registry that tracks active WebSocket sessions.
+
+    Each ``SessionRuntime`` is keyed by its UUID session_id.
+    Sessions are removed upon close to avoid unbounded memory growth.
+    """
+
     def __init__(self) -> None:
         self._sessions: dict[str, SessionRuntime] = {}
 
@@ -221,6 +228,6 @@ class SessionManager:
         return self._sessions.get(session_id)
 
     async def close_session(self, session_id: str) -> None:
-        session = self._sessions.get(session_id)
+        session = self._sessions.pop(session_id, None)
         if session is not None:
             await session.close()

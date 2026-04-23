@@ -6,6 +6,8 @@ from app.models.events import AIChunkEvent
 from app.models.events import ErrorEvent
 from app.models.session import ConversationMessage
 from app.services.session_response import normalize_ai_response
+from app.services.schema_normalizer import derive_extracted_fields
+from app.services.schema_normalizer import normalize_extracted_fields
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,7 @@ async def run_turn_graph(
     should_extract: bool,
     should_trigger: bool,
 ) -> None:
-    logger.info(f"run_turn_graph CALLED for: {utterance[:50]}")
+    logger.info("run_turn_graph CALLED for: %.50s", utterance)
 
     async with session.ai_lock:
         conversation_context = session.build_recent_conversation_context()
@@ -44,6 +46,7 @@ async def run_turn_graph(
             "customer_last_utterance": session.state.customer_last_utterance,
             "agent_last_utterance": session.state.agent_last_utterance,
             "context_summary": session.state.rolling_summary or conversation_context,
+            "last_suggestion": session.state.last_suggestion,
         }
 
         full_text = ""
@@ -63,12 +66,9 @@ async def run_turn_graph(
                         fields = data.get("fields", {})
                         if isinstance(fields, dict):
                             session.state.extracted_fields.update(
-                                {
-                                    str(key): str(value)
-                                    for key, value in fields.items()
-                                    if value is not None and str(value).strip()
-                                }
+                                normalize_extracted_fields(fields)
                             )
+                            derive_extracted_fields(session.state.extracted_fields)
                 elif chunk_type == "updates":
                     updates = chunk.get("data", {})
                     if isinstance(updates, dict):
@@ -78,12 +78,9 @@ async def run_turn_graph(
                             extracted = node_update.get("extracted_fields")
                             if isinstance(extracted, dict):
                                 session.state.extracted_fields.update(
-                                    {
-                                        str(key): str(value)
-                                        for key, value in extracted.items()
-                                        if value is not None and str(value).strip()
-                                    }
+                                    normalize_extracted_fields(extracted)
                                 )
+                                derive_extracted_fields(session.state.extracted_fields)
                             raw_response = node_update.get("raw_response")
                             if isinstance(raw_response, str) and raw_response:
                                 full_text = raw_response
@@ -95,8 +92,10 @@ async def run_turn_graph(
         if not full_text:
             return
 
-        logger.info(f"RAW LLM RESPONSE: {full_text[:500]}")
+        logger.info("RAW LLM RESPONSE: %.500s", full_text)
         full_text = normalize_ai_response(session, full_text, utterance)
+        if not full_text:
+            return
         session.state.messages.append(
             ConversationMessage(
                 type="ai",

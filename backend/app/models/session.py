@@ -21,3 +21,6 @@ class SessionState(BaseModel):
     rolling_summary: str = Field(default="")
     customer_history: list[str] = Field(default_factory=list)
     agent_history: list[str] = Field(default_factory=list)
+    last_suggestion: str = Field(default="")  # last AI suggestion — used to prevent repetition
+    last_triggered_utterance_key: str = Field(default="")
+    last_triggered_utterance_at: float = Field(default=0.0)

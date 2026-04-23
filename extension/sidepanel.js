@@ -1,6 +1,8 @@
 // sidepanel.js — Native Side Panel Logic
 
 let currentCard = null;
+let pendingMergeCard = null;
+let pendingMergeAt = 0;
 const aiCards = new Map();
 const container = document.getElementById('transcript-container');
 const toggleBtn = document.getElementById('toggle-btn');
@@ -40,55 +42,12 @@ function renderStoredUtterance(msg) {
 }
 
 function renderStoredAiResponse(msg) {
-  const parsed = parseAiSections(msg.text);
-  const card = document.createElement('div');
-  card.className = 'ai-response-card';
-
-  const contextLabel = document.createElement('div');
-  contextLabel.className = 'ai-section-label';
-  contextLabel.textContent = 'Context';
-
-  const summary = document.createElement('div');
-  summary.className = 'ai-context';
-  summary.textContent = parsed.summary;
-
-  const customerInfoLabel = document.createElement('div');
-  customerInfoLabel.className = 'ai-section-label';
-  customerInfoLabel.textContent = 'Customer Info';
-
-  const customerInfo = document.createElement('div');
-  customerInfo.className = 'ai-context';
-  customerInfo.textContent = parsed.customerInfo;
-  customerInfo.style.display = parsed.customerInfo ? 'block' : 'none';
-  customerInfoLabel.style.display = parsed.customerInfo ? 'block' : 'none';
-
-  const suggestionLabel = document.createElement('div');
-  suggestionLabel.className = 'ai-section-label';
-  suggestionLabel.textContent = 'Suggestion';
-
-  const content = document.createElement('div');
-  content.className = 'ai-suggestion';
-  content.textContent = parsed.suggestion;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'copy-button';
-  copyBtn.textContent = 'Copy';
-  copyBtn.onclick = () => {
-    navigator.clipboard.writeText(parsed.suggestion);
-    copyBtn.textContent = 'Copied!';
-    setTimeout(() => {
-      copyBtn.textContent = 'Copy';
-    }, 2000);
-  };
-
-  card.appendChild(contextLabel);
-  card.appendChild(summary);
-  card.appendChild(customerInfoLabel);
-  card.appendChild(customerInfo);
-  card.appendChild(suggestionLabel);
-  card.appendChild(content);
-  card.appendChild(copyBtn);
-  container.appendChild(card);
+  const card = createAiResponseCard(msg.utteranceId || `stored-${Date.now()}-${Math.random()}`, {
+    collapsed: true,
+  });
+  card.fullText = msg.text || '';
+  updateAiCardContent(card, parseAiSections(card.fullText));
+  container.appendChild(card.element);
 }
 
 async function initializePanel() {
@@ -194,19 +153,34 @@ function updateCaptureModeUI(mode) {
   captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
 }
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'TRANSCRIPT_UPDATE') {
+// ---------------------------------------------------------------------------
+// onMessage router
+// ---------------------------------------------------------------------------
+
+const SIDEPANEL_MESSAGE_HANDLERS = {
+  TRANSCRIPT_UPDATE(message) {
     const { transcript, isFinal, metadata, speaker } = message;
     const speakerLabel = resolveSpeakerLabel(speaker, metadata);
+    const now = Date.now();
+    const canMergePending =
+      pendingMergeCard
+      && pendingMergeCard.speakerLabel === speakerLabel
+      && now - pendingMergeAt <= 1800;
 
     if (!currentCard && transcript.trim()) {
-      const utteranceId = `u-${Date.now()}`;
-      currentCard = createUtteranceCard(utteranceId, speakerLabel);
-      container.appendChild(currentCard.element);
+      if (canMergePending) {
+        currentCard = pendingMergeCard;
+        pendingMergeCard = null;
+        reviveCard(currentCard);
+      } else {
+        currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
+        container.appendChild(currentCard.element);
+      }
     } else if (currentCard && transcript.trim() && speakerLabel !== currentCard.speakerLabel) {
       finalizeCard(currentCard);
-      const utteranceId = `u-${Date.now()}`;
-      currentCard = createUtteranceCard(utteranceId, speakerLabel);
+      pendingMergeCard = currentCard;
+      pendingMergeAt = Date.now();
+      currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
       container.appendChild(currentCard.element);
     }
 
@@ -215,6 +189,8 @@ chrome.runtime.onMessage.addListener((message) => {
         appendFinalToCard(currentCard, transcript);
         if (metadata && metadata.speech_final) {
           finalizeCard(currentCard);
+          pendingMergeCard = currentCard;
+          pendingMergeAt = Date.now();
           currentCard = null;
         }
       } else {
@@ -222,49 +198,43 @@ chrome.runtime.onMessage.addListener((message) => {
       }
       scrollToBottom();
     }
-  }
+  },
 
-  if (message.type === 'AI_RESPONSE_CHUNK') {
+  AI_RESPONSE_CHUNK(message) {
     const { utteranceId, text, isDone, finalText } = message;
     let aiCard = aiCards.get(utteranceId);
-
     if (!aiCard) {
+      collapseOtherAiCards(utteranceId);
       aiCard = createAiResponseCard(utteranceId);
       aiCards.set(utteranceId, aiCard);
       container.appendChild(aiCard.element);
     }
-
-    if (text) {
-      appendChunkToAiCard(aiCard, text);
-    }
-
+    if (text) appendChunkToAiCard(aiCard, text);
     if (isDone) {
-      if (finalText) {
-        replaceAiCardWithFinalText(aiCard, finalText);
-      }
+      if (finalText) replaceAiCardWithFinalText(aiCard, finalText);
       finalizeAiCard(aiCard);
     }
     scrollToBottom();
-  }
+  },
 
-  if (message.type === 'CAPTURE_STATUS_CHANGED') {
-    updateCaptureUI(message.active);
-  }
+  CAPTURE_STATUS_CHANGED(message) { updateCaptureUI(message.active); },
+  CAPTURE_MODE_CHANGED(message)   { updateCaptureModeUI(message.captureMode); },
 
-  if (message.type === 'CAPTURE_MODE_CHANGED') {
-    updateCaptureModeUI(message.captureMode);
-  }
-
-  if (message.type === 'UTTERANCE_END') {
+  UTTERANCE_END() {
     if (currentCard) {
       finalizeCard(currentCard);
+      pendingMergeCard = currentCard;
+      pendingMergeAt = Date.now();
       currentCard = null;
     }
-  }
+  },
 
-  if (message.type === 'API_ERROR') {
-    addErrorToContainer(message.message, message.source);
-  }
+  API_ERROR(message) { addErrorToContainer(message.message, message.source); },
+};
+
+chrome.runtime.onMessage.addListener((message) => {
+  const handler = SIDEPANEL_MESSAGE_HANDLERS[message.type];
+  if (handler) handler(message);
 });
 
 function scrollToBottom() {
@@ -274,7 +244,7 @@ function scrollToBottom() {
 function createUtteranceCard(id, speakerLabel = 'Customer') {
   const el = document.createElement('div');
   el.className = 'utterance-card';
-  const badge = document.createElement('span');
+  const badge = document.createElement('div');
   badge.className = `speaker-tag ${speakerLabel === 'Agent' ? 'agent' : 'customer'}`;
   badge.textContent = speakerLabel;
   const textWrap = document.createElement('div');
@@ -310,6 +280,10 @@ function finalizeCard(card) {
   card.interim.textContent = '';
 }
 
+function reviveCard(card) {
+  card.element.classList.remove('finalized');
+}
+
 function resolveSpeakerLabel(speaker, metadata) {
   if (speaker === '1') {
     return 'Agent';
@@ -324,25 +298,36 @@ function resolveSpeakerLabel(speaker, metadata) {
   return 'Customer';
 }
 
-function createAiResponseCard(id) {
+function createAiResponseCard(id, options = {}) {
+  const collapsed = options.collapsed ?? false;
   const el = document.createElement('div');
   el.className = 'ai-response-card';
+  el.dataset.utteranceId = id;
 
-  const contextLabel = document.createElement('div');
-  contextLabel.className = 'ai-section-label loading';
-  contextLabel.textContent = 'Context';
+  const header = document.createElement('div');
+  header.className = 'ai-response-header';
 
-  const summary = document.createElement('div');
-  summary.className = 'ai-context';
+  const title = document.createElement('div');
+  title.className = 'ai-response-title';
+  title.textContent = 'AI Response';
+
+  const controls = document.createElement('div');
+  controls.className = 'ai-response-controls';
+
+  const collapseBtn = document.createElement('button');
+  collapseBtn.type = 'button';
+  collapseBtn.className = 'ai-collapse-button';
+  collapseBtn.textContent = 'Collapse';
+
+  const body = document.createElement('div');
+  body.className = 'ai-response-body';
 
   const customerInfoLabel = document.createElement('div');
   customerInfoLabel.className = 'ai-section-label loading';
   customerInfoLabel.textContent = 'Customer Info';
-  customerInfoLabel.style.display = 'none';
 
   const customerInfo = document.createElement('div');
   customerInfo.className = 'ai-context';
-  customerInfo.style.display = 'none';
 
   const suggestionLabel = document.createElement('div');
   suggestionLabel.className = 'ai-section-label loading';
@@ -351,36 +336,58 @@ function createAiResponseCard(id) {
   const content = document.createElement('div');
   content.className = 'ai-suggestion';
 
-  el.appendChild(contextLabel);
-  el.appendChild(summary);
-  el.appendChild(customerInfoLabel);
-  el.appendChild(customerInfo);
-  el.appendChild(suggestionLabel);
-  el.appendChild(content);
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'copy-button';
+  copyBtn.textContent = 'Copy';
 
-  return { element: el, contextLabel, summary, customerInfoLabel, customerInfo, suggestionLabel, content, id, fullText: '' };
+  controls.appendChild(collapseBtn);
+  controls.appendChild(copyBtn);
+  header.appendChild(title);
+  header.appendChild(controls);
+
+  body.appendChild(customerInfoLabel);
+  body.appendChild(customerInfo);
+  body.appendChild(suggestionLabel);
+  body.appendChild(content);
+
+  el.appendChild(header);
+  el.appendChild(body);
+
+  const card = {
+    element: el,
+    customerInfoLabel,
+    customerInfo,
+    suggestionLabel,
+    content,
+    copyBtn,
+    collapseBtn,
+    body,
+    id,
+    fullText: '',
+    collapsed: false,
+  };
+
+  collapseBtn.onclick = () => toggleAiCardCollapse(card);
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(card.content.textContent || '');
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => {
+      copyBtn.textContent = 'Copy';
+    }, 2000);
+  };
+
+  setAiCardCollapsed(card, collapsed);
+  return card;
 }
 
 function appendChunkToAiCard(card, text) {
   card.fullText += text;
   const parsed = parseAiSections(card.fullText);
-  card.summary.textContent = parsed.summary;
-  card.customerInfo.textContent = parsed.customerInfo;
-  card.customerInfo.style.display = parsed.customerInfo ? 'block' : 'none';
-  card.customerInfoLabel.style.display = parsed.customerInfo ? 'block' : 'none';
-  card.content.textContent = parsed.suggestion;
+  updateAiCardContent(card, parsed);
 }
 
 function replaceAiCardWithFinalText(card, finalText) {
   card.fullText = finalText;
-  card.summary.textContent = '';
-  card.customerInfo.textContent = '';
-  card.customerInfo.style.display = 'none';
-  card.customerInfoLabel.style.display = 'none';
-  card.content.textContent = '';
-  card.contextLabel.classList.add('loading');
-  card.customerInfoLabel.classList.add('loading');
-  card.suggestionLabel.classList.add('loading');
   appendChunkToAiCard(card, '');
 }
 
@@ -390,7 +397,7 @@ function parseAiSections(text) {
   // Support both [INFO] and [CUSTOMER_INFO]
   const customerInfoMatch = normalized.match(/\[INFO\](.*?)(?=\[CUSTOMER_INFO\]|\[SUGGESTION\]|\[ANSWER\]|$)/i)
     || normalized.match(/\[CUSTOMER_INFO\](.*?)(?=\[SUGGESTION\]|\[ANSWER\]|$)/i);
-  const suggestionMatch = normalized.match(/\[(?:SUGGESTION|ANSWER)\](.*)$/i);
+  const suggestionMatch = normalized.match(/\[(?:SUGGESTION|ANSWER)\](.*?)(?=\[INFO\]|\[CUSTOMER_INFO\]|$)/i);
 
   let summary = summaryMatch ? summaryMatch[1].trim() : '';
   let customerInfo = customerInfoMatch ? customerInfoMatch[1].trim() : '';
@@ -399,14 +406,12 @@ function parseAiSections(text) {
   summary = summary.replace(/^context:\s*/i, '').replace(/^topic:\s*/i, '').trim();
   customerInfo = customerInfo.replace(/^(customer\s*info:\s*|info:\s*)/i, '').trim();
   suggestion = suggestion.replace(/^suggestion:\s*/i, '').replace(/^answer:\s*/i, '').replace(/^topic:\s*/i, '').trim();
+  suggestion = suggestion.replace(/\{[^{}]*\}\s*$/, '').trim();
 
   if (summary && suggestion.startsWith(summary)) {
     suggestion = suggestion.slice(summary.length).trim();
   }
 
-  if (!summary) {
-    summary = 'Current customer discussion';
-  }
   if (!suggestion) {
     suggestion = 'Suggestion is being prepared.';
   }
@@ -415,21 +420,6 @@ function parseAiSections(text) {
 }
 
 function finalizeAiCard(card) {
-  if (!card.copyBtn) {
-    const btn = document.createElement('button');
-    btn.className = 'copy-button';
-    btn.textContent = 'Copy';
-    btn.onclick = () => {
-      navigator.clipboard.writeText(card.content.textContent);
-      btn.textContent = 'Copied!';
-      setTimeout(() => {
-        btn.textContent = 'Copy';
-      }, 2000);
-    };
-    card.element.appendChild(btn);
-    card.copyBtn = btn;
-  }
-
   if (!card.speakBtn && card.content.textContent.includes('Ask:')) {
     const speakBtn = document.createElement('button');
     speakBtn.className = 'copy-button';
@@ -443,9 +433,36 @@ function finalizeAiCard(card) {
   }
 }
 
+function updateAiCardContent(card, parsed) {
+  card.customerInfoLabel.classList.remove('loading');
+  card.suggestionLabel.classList.remove('loading');
+  card.customerInfoLabel.style.display = parsed.customerInfo ? 'block' : 'none';
+  card.customerInfo.textContent = parsed.customerInfo;
+  card.customerInfo.style.display = parsed.customerInfo ? 'block' : 'none';
+  card.content.textContent = parsed.suggestion;
+}
+
+function setAiCardCollapsed(card, collapsed) {
+  card.collapsed = collapsed;
+  card.element.classList.toggle('collapsed', collapsed);
+  card.collapseBtn.textContent = collapsed ? 'Expand' : 'Collapse';
+}
+
+function toggleAiCardCollapse(card) {
+  setAiCardCollapsed(card, !card.collapsed);
+}
+
+function collapseOtherAiCards(activeId) {
+  for (const [utteranceId, card] of aiCards.entries()) {
+    if (utteranceId !== activeId) {
+      setAiCardCollapsed(card, true);
+    }
+  }
+}
+
 function addErrorToContainer(msg, source) {
   const el = document.createElement('div');
-  el.style.cssText = 'background:#3a1e1e; border:1px solid #ff6b6b; padding:12px; border-radius:8px; color:#ff6b6b; font-size:0.9rem;';
+  el.className = 'error-card';
   el.textContent = `[${source}] Error: ${msg}`;
   container.appendChild(el);
   scrollToBottom();

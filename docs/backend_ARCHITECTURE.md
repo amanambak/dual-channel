@@ -2,123 +2,146 @@
 
 ## Purpose
 
-The backend is the real-time processing core for the Chrome extension. It centralizes transcription, utterance segmentation, suggestion generation, schema-based customer info extraction, and summary APIs.
+The backend is the real-time processing core for the Chrome extension. It accepts the browser WebSocket session, opens one Deepgram streaming connection per active audio channel, segments turns, runs schema-driven customer-info extraction, and streams AI suggestions back to the extension.
 
 ## High-Level Flow
 
 ```mermaid
 graph TD
-    EXT[Chrome Extension Offscreen] -->|PCM audio over WebSocket| API[FastAPI WS /ws/session]
-    API --> SM[SessionRuntime]
-    SM --> DG[DeepgramClient]
-    DG --> DGA[Deepgram Streaming API]
+    EXT[Chrome Extension Offscreen] -->|start_session + config| API[FastAPI WS /ws/session]
+    API --> SM[SessionManager]
+    SM --> SR[SessionRuntime]
+    SR --> ST[session_transport]
+    ST --> DG[DeepgramClient]
+    DG --> DGA[Deepgram WS /v1/listen]
     DGA --> DG
-    DG --> SM
-    SM -->|interim/final transcript events| EXT
-    SM -->|meaningful utterance| LG[LangGraph turn graph]
-    LG --> LC[LangChain LLM service]
-    LC --> API2[LLM provider API]
+    DG --> ST
+    ST -->|transcript_update / utterance_end| SR
+    SR -->|finalized utterance| SF[session_finalize]
+    SF -->|should_extract / should_trigger| LG[LangGraph turn graph]
+    LG --> EX[extract_schema]
+    EX --> SN[Schema normalizer + derived fields]
+    LG --> GR[generate_response]
+    GR --> LC[LLMService]
+    LC --> API2[LLM provider]
     API2 --> LC
-    LC -->|summary, customer info, suggestion| LG
-    LG -->|graph output| SM
-    SM -->|AI_RESPONSE events| EXT
-    SM --> SR[SchemaRegistry]
-    SR --> CSV[home_loan_schema.csv]
-    SR --> JSON[customer_info.json]
+    LC -->|stream chunks| GR
+    GR -->|ai_response_chunk / ai_response_done| SR
+    SR -->|normalized [SUMMARY]/[INFO]/[SUGGESTION]| EXT
+    SR --> SUM[Session summary APIs]
 ```
 
 ## Main Components
 
 ### 1. API Layer
 
-- [backend/app/api/websocket.py](/home/amanpaswan/Documents/final/backend/app/api/websocket.py)
-- Exposes:
-  - `WS /ws/session`
-  - `GET /api/sessions/{session_id}/summary`
-  - `POST /api/summary`
+- `backend/app/api/websocket.py`
 
-`WS /ws/session` creates one in-memory `SessionRuntime` for each browser connection.
+Exposes:
+
+- `WS /ws/session`
+- `GET /api/sessions/{session_id}/summary`
+- `POST /api/summary`
+
+The websocket endpoint creates a `SessionRuntime` per browser connection. Summary endpoints read from the live session state when it is available, otherwise the ad-hoc summary endpoint uses the same extraction service on supplied text.
 
 ### 2. Session Orchestration
 
-- [backend/app/services/session_manager.py](/home/amanpaswan/Documents/final/backend/app/services/session_manager.py)
+- `backend/app/services/session_manager.py`
+- `backend/app/services/session_transport.py`
+- `backend/app/services/session_finalize.py`
+- `backend/app/services/session_turn_runner.py`
 
 `SessionRuntime` owns:
 
-- WebSocket lifecycle
-- Deepgram upstream connection
-- interim/final transcript handling
+- websocket lifecycle
+- Deepgram channel connections
 - utterance buffering and debounce
-- noise and filler suppression
-- incomplete utterance buffering
-- LLM invocation rate limiting
+- confidence and noise filtering
+- high-confidence local extraction updates
+- call-stage gating
 - per-session message history
-- per-session `extracted_fields`
+- durable in-memory extracted fields
+
+`session_transport.py` accepts the `start_session` payload from the extension, normalizes Deepgram query params, and opens one Deepgram connection per channel. The current live params include `interim_results`, `multichannel`, and `punctuate`.
 
 ### 3. Deepgram Streaming
 
-- [backend/app/services/deepgram_client.py](/home/amanpaswan/Documents/final/backend/app/services/deepgram_client.py)
+- `backend/app/services/deepgram_client.py`
 
 Responsibilities:
 
-- build Deepgram WebSocket URL with query params
+- build the Deepgram WebSocket URL
+- normalize query params into string form before encoding
 - authorize using the Deepgram API key
 - send binary PCM audio chunks
 - receive transcript payloads
-- close upstream stream cleanly
+- close upstream streams cleanly
 
-### 4. LLM and Graph Layers
+The live stream uses Nova-3 in this repo. `punctuate=true` is enabled for readability, while `smart_format` stays off to keep latency predictable.
 
-- [backend/app/llm/service.py](file:///home/amanpaswan/Desktop/dual-channel/backend/app/llm/service.py)
-- [backend/app/graph/](file:///home/amanpaswan/Desktop/dual-channel/backend/app/graph/)
+### 4. Turn Graph and LLM Layer
 
-Responsibilities:
+- `backend/app/graph/factory.py`
+- `backend/app/graph/nodes.py`
+- `backend/app/llm/service.py`
 
-- stream live suggestions for finalized utterances
-- extract schema-based customer fields with structured outputs
-- generate ad-hoc structured summary payloads when needed
-- model orchestration as explicit graph nodes and edges
+The current turn graph is sequential:
 
-### 5. Schema Registry
+1. `extract_schema`
+2. `generate_response`
 
-- [backend/app/services/schema_registry.py](/home/amanpaswan/Documents/final/backend/app/services/schema_registry.py)
+Extraction runs first when enabled so the response stage can use same-turn fields. `generate_response` streams chunks progressively, suppresses `[SKIP]`, and emits `AIChunkEvent` and `AIDoneEvent` messages for the extension.
 
-Loads valid field names from:
+`LLMService` builds the prompts for:
 
-- [backend/home_loan_schema.csv](/home/amanpaswan/Documents/final/backend/home_loan_schema.csv)
-- [backend/customer_info.json](/home/amanpaswan/Documents/final/backend/customer_info.json)
+- schema extraction
+- response generation
+- summary generation
 
-The registry is used to constrain customer info extraction so stored keys match backend schema variable names.
+### 5. Schema Registry and Normalization
 
-## Session State
+- `backend/app/services/schema_registry.py`
+- `backend/app/services/schema_normalizer.py`
+- `backend/customer_info.json`
+- `backend/home_loan_schema.csv`
 
-- [backend/app/models/session.py](/home/amanpaswan/Documents/final/backend/app/models/session.py)
+The schema registry loads the field definitions and metadata. The normalizer then:
 
-State stored per session:
+- filters unknown keys
+- coerces values to the expected type
+- handles aliases such as `employment_type -> profession`
+- derives fields such as `is_property_identified`, `existing_emi`, `is_obligation`, and `customer_earn_cash_income`
+- seeds high-confidence values from explicit utterance text before the LLM runs
 
-- `current_segments` (list of (text, speaker) tuples)
+This is what lets the backend keep customer-info output aligned with the schema instead of emitting arbitrary JSON.
+
+### 6. Session State
+
+- `backend/app/models/session.py`
+
+Important live fields:
+
 - `messages`
 - `extracted_fields`
-- `conversation_state` (pending_question for two-way conversation)
+- `customer_last_utterance`
+- `agent_last_utterance`
+- `rolling_summary`
+- `last_suggestion`
 
-`extracted_fields` is the durable in-memory customer-info map for a live session, including `know_` fields.
+`extracted_fields` is the durable customer-info map for the active session. Summary endpoints read directly from it.
 
 ## Transcript Handling Logic
 
 ### Interim Transcript
 
 - forwarded to the extension immediately
-- not used for LLM calls
+- used for live UI updates
+- not treated as a finalized turn
 
 ### Final Transcript
 
-Final transcript chunks are accepted only if they pass:
-
-- minimum quality checks
-- filler/noise filtering
-- confidence threshold checks
-
-Accepted final chunks are buffered, then finalized after a short debounce.
+Final transcript chunks are accepted only after confidence and noise checks pass. The backend buffers them briefly, merges fragments, and emits `utterance_end` when a turn is ready to be finalized.
 
 ### Utterance Finalization
 
@@ -126,41 +149,42 @@ When an utterance finalizes:
 
 1. final transcript chunks are merged
 2. incomplete trailing fragments can be held for the next turn
-3. the utterance is stored in session history
-4. schema extraction may run in the background
-5. LLM suggestion generation may run if gating rules pass
+3. high-confidence local updates are applied
+4. the utterance is stored in session history
+5. schema extraction may run
+6. response generation may run if the gating rules allow it
 
 ## Two-Way Conversation Logic
 
-- Uses Deepgram speaker diarization to distinguish agent (speaker 1) and customer (speaker 0)
-- Generates agent questions for missing fields (e.g., loan_amount) via the LLM service
-- Parses customer responses to extract values and update fields
-- Only processes customer utterances for suggestions and extraction
-- Sends questions as AI suggestions with "Ask:" prefix
+- Channel 0 is the customer/tab audio.
+- Channel 1 is the agent/microphone audio when available.
+- Deepgram diarization and channel metadata are used to keep the speaker labels stable.
+- Customer turns are the primary source for schema extraction.
+- Agent turns are used for conversational state, call-stage detection, and response context.
 
 ## LLM Invocation Guardrails
 
-The backend prevents unnecessary LLM calls using:
+The backend avoids unnecessary LLM calls using:
 
-- minimum interval between LLM calls
-- minimum average confidence threshold
-- noise/filler detection
+- minimum interval between turns
+- minimum confidence thresholds
+- noise and filler detection
 - duplicate utterance suppression
-- short non-business utterance suppression
 - incomplete utterance buffering
-- speaker filtering (only customer utterances)
+- speaker filtering
+- call-stage gating
 
-This is why the backend may ignore silence, greetings, or low-quality background transcript fragments.
+This is why the backend may skip greetings, partial fragments, or repeated low-value text.
 
 ## Output Contract To Extension
 
-The backend emits normalized sections for live cards:
+The backend emits normalized live sections for the side panel:
 
 - `[SUMMARY]`
-- `[CUSTOMER_INFO]`
+- `[INFO]`
 - `[SUGGESTION]`
 
-The extension parses these and renders separate sections in the side panel.
+Streaming chunks are sent separately as `ai_response_chunk` events, followed by `ai_response_done` once the final formatted response is ready.
 
 ## Summary Endpoints
 
@@ -168,7 +192,7 @@ The extension parses these and renders separate sections in the side panel.
 
 `GET /api/sessions/{session_id}/summary`
 
-Returns session-backed customer info:
+Returns the current session customer-info map:
 
 ```json
 {
@@ -183,21 +207,19 @@ Returns session-backed customer info:
 
 `POST /api/summary`
 
-Used as a fallback when the extension only has stored conversation text and not a live session.
+Uses the same schema extraction service on supplied conversation text when there is no active live session.
 
 ## Known Constraints
 
 - Session state is currently in-memory only
-- If the backend restarts, session-backed summary state is lost
-- Ad-hoc summary can only infer customer info from stored conversation text
-- Deepgram payloads may include non-transcript messages that are skipped
-- Two-way conversation requires diarization; falls back to one-way if unavailable
-- Parsing responses may have accuracy issues for complex inputs
+- A backend restart clears live session memory
+- Deepgram payloads can contain non-transcript events that must be skipped
+- Two-way conversation quality depends on diarization and audio quality
+- Punctuation improves readability but does not replace debounce or turn-finalization logic
 
 ## Recommended Next Steps
 
 - persist session/customer state in Redis or a database
-- add deterministic extraction for critical fields such as `mobile`, `email`, `loan_amount`, `cibil_score`
-- add structured telemetry for dropped utterances and LLM gating decisions
-- add tests for transcript gating, fallback summary, schema extraction, and two-way conversation
-- improve speaker diarization accuracy with custom models or post-processing
+- add regression tests for schema normalization and response formatting
+- log per-turn LLM token usage and skipped-call reasons
+- keep the Deepgram query-param normalization close to the transport boundary

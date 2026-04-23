@@ -15,7 +15,7 @@ class DeepgramClient:
         self.connection: ClientConnection | None = None
 
     async def connect(self) -> ClientConnection:
-        query = urlencode(self.params)
+        query = urlencode(_normalize_query_params(self.params))
         url = self.settings.deepgram_ws_url
         if query:
             url = f"{url}?{query}"
@@ -59,3 +59,15 @@ class DeepgramClient:
         if self.connection is not None:
             await self.connection.close()
             self.connection = None
+
+
+def _normalize_query_params(params: dict) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in params.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            normalized[key] = "true" if value else "false"
+        else:
+            normalized[key] = str(value)
+    return normalized

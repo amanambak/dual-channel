@@ -31,6 +31,25 @@ def build_turn_nodes(llm: LLMService):
 
         writer = get_stream_writer()
         full_text = ""
+        buffered_chunks: list[str] = []
+        started_streaming = False
+        skip_prefix = "[SKIP]"
+        valid_prefixes = ("[SUMMARY]", "[SUGGESTION]", "[INFO]")
+
+        def _release_buffer() -> None:
+            nonlocal started_streaming
+            if started_streaming:
+                return
+            for buffered_chunk in buffered_chunks:
+                writer(
+                    {
+                        "type": "ai_chunk",
+                        "utterance_id": state.get("utterance_id"),
+                        "text": buffered_chunk,
+                    }
+                )
+            buffered_chunks.clear()
+            started_streaming = True
 
         async for chunk in llm.stream_reply(
             state.get("utterance", ""),
@@ -40,15 +59,38 @@ def build_turn_nodes(llm: LLMService):
             agent_last_utterance=state.get("agent_last_utterance", ""),
             context_summary=state.get("context_summary", ""),
             known_entities=state.get("known_fields", {}),
+            last_suggestion=state.get("last_suggestion", ""),
         ):
             full_text += chunk
-            writer(
-                {
-                    "type": "ai_chunk",
-                    "utterance_id": state.get("utterance_id"),
-                    "text": chunk,
-                }
-            )
+            if not started_streaming:
+                buffered_chunks.append(chunk)
+                normalized = "".join(buffered_chunks).lstrip()
+                upper_normalized = normalized.upper()
+                if upper_normalized == skip_prefix:
+                    return {}
+                if any(prefix.startswith(upper_normalized) for prefix in valid_prefixes):
+                    if any(upper_normalized.startswith(prefix) for prefix in valid_prefixes):
+                        _release_buffer()
+                    continue
+                if any(upper_normalized.startswith(prefix) for prefix in valid_prefixes):
+                    _release_buffer()
+                    continue
+                if len(normalized) > len(skip_prefix) and not any(
+                    prefix.startswith(upper_normalized) for prefix in valid_prefixes
+                ):
+                    _release_buffer()
+            if started_streaming:
+                writer(
+                    {
+                        "type": "ai_chunk",
+                        "utterance_id": state.get("utterance_id"),
+                        "text": chunk,
+                    }
+                )
+
+        # [SKIP] means the model has nothing new to contribute — suppress the event.
+        if not full_text or full_text.strip().upper().startswith("[SKIP]"):
+            return {}
 
         return {"raw_response": full_text}
 
