@@ -7,6 +7,7 @@ const CONFIG = {
   DEEPGRAM_PARAMS: {
     model: 'nova-3',
     language: 'multi',
+    punctuate: true,
     utterance_end_ms: 1800,
     endpointing: 400,
     encoding: 'linear16',

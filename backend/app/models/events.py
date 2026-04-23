@@ -15,6 +15,7 @@ class UtteranceCommittedEvent(BaseModel):
     type: str = "utterance_committed"
     utteranceId: str
     text: str
+    speaker: str | None = None
 
 
 class AIChunkEvent(BaseModel):

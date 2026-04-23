@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,14 +10,15 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    deepgram_api_key: str = Field(default="")
+    deepgram_api_key: str = ""
     deepgram_ws_url: str = "wss://api.deepgram.com/v1/listen"
-    gemini_api_key: str = Field(default="")
-    gemini_model: str = "gemini-3.1-flash-lite-preview"
-    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/models"
-
-    summary_model: str = "gemini-3.1-flash-lite-preview"
-    fallback_model: str = "gemini-3.1-flash-lite-preview"
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    )
+    llm_model: str = "gemini-3.1-flash-lite-preview"
+    llm_summary_model: str = "gemini-3.1-flash-lite-preview"
+    llm_extract_model: str = "gemini-3.1-flash-lite-preview"
     request_timeout_seconds: float = 60.0
 
     model_config = SettingsConfigDict(

@@ -3,6 +3,7 @@ from urllib.parse import urlencode
 
 import websockets
 from websockets.asyncio.client import ClientConnection
+from websockets.exceptions import ConnectionClosed
 
 from app.core.config import get_settings
 
@@ -14,7 +15,7 @@ class DeepgramClient:
         self.connection: ClientConnection | None = None
 
     async def connect(self) -> ClientConnection:
-        query = urlencode(self.params)
+        query = urlencode(_normalize_query_params(self.params))
         url = self.settings.deepgram_ws_url
         if query:
             url = f"{url}?{query}"
@@ -26,10 +27,23 @@ class DeepgramClient:
         )
         return self.connection
 
-    async def send_audio(self, payload: bytes) -> None:
+    async def send_audio(self, payload: bytes) -> bool:
         if self.connection is None:
-            return
-        await self.connection.send(payload)
+            return False
+        try:
+            await self.connection.send(payload)
+            return True
+        except ConnectionClosed:
+            return False
+
+    async def send_keepalive(self) -> bool:
+        if self.connection is None:
+            return False
+        try:
+            await self.connection.send(json.dumps({"type": "KeepAlive"}))
+            return True
+        except ConnectionClosed:
+            return False
 
     async def send_close(self) -> None:
         if self.connection is None:
@@ -45,3 +59,15 @@ class DeepgramClient:
         if self.connection is not None:
             await self.connection.close()
             self.connection = None
+
+
+def _normalize_query_params(params: dict) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in params.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            normalized[key] = "true" if value else "false"
+        else:
+            normalized[key] = str(value)
+    return normalized

@@ -1,15 +1,31 @@
 // sidepanel.js — Native Side Panel Logic
 
 let currentCard = null;
+let pendingMergeCard = null;
+let pendingMergeAt = 0;
 const aiCards = new Map();
 const container = document.getElementById('transcript-container');
+const callTabBtn = document.getElementById('call-tab');
+const chatTabBtn = document.getElementById('chat-tab');
+const callView = document.getElementById('call-view');
+const chatView = document.getElementById('chat-view');
 const toggleBtn = document.getElementById('toggle-btn');
 const clearBtn = document.getElementById('clear-btn');
 const dot = document.getElementById('dot');
+const captureModeBtn = document.getElementById('capture-mode-btn');
 const summaryBtn = document.getElementById('summary-btn');
 const summaryModal = document.getElementById('summary-modal');
 const modalClose = document.getElementById('modal-close');
 const modalBody = document.getElementById('modal-body');
+const chatLog = document.getElementById('chat-log');
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const chatSendBtn = document.getElementById('chat-send-btn');
+const clearChatBtn = document.getElementById('clear-chat-btn');
+
+let activePanelTab = 'call';
+let chatMessages = [];
+let chatSending = false;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -17,6 +33,20 @@ async function loadStoredMessages() {
       resolve(response?.messages || []);
     });
   });
+}
+
+async function loadStoredChatMessages() {
+  const result = await chrome.storage.local.get(['chatMessages', 'activePanelTab']);
+  chatMessages = Array.isArray(result.chatMessages) ? result.chatMessages : [];
+  activePanelTab = result.activePanelTab === 'chat' ? 'chat' : 'call';
+}
+
+async function persistChatMessages() {
+  await chrome.storage.local.set({ chatMessages });
+}
+
+async function persistActivePanelTab() {
+  await chrome.storage.local.set({ activePanelTab });
 }
 
 function renderStoredMessages(messages) {
@@ -31,76 +61,48 @@ function renderStoredMessages(messages) {
 }
 
 function renderStoredUtterance(msg) {
-  const card = document.createElement('div');
-  card.className = 'utterance-card finalized';
-  card.textContent = msg.text;
-  container.appendChild(card);
+  const speakerLabel = resolveSpeakerLabel(msg.speaker);
+  const card = createUtteranceCard(`stored-${Date.now()}-${Math.random()}`, speakerLabel);
+  card.stable.textContent = msg.text || '';
+  finalizeCard(card);
+  container.appendChild(card.element);
 }
 
 function renderStoredAiResponse(msg) {
-  const parsed = parseAiSections(msg.text);
-  const card = document.createElement('div');
-  card.className = 'ai-response-card';
-
-  const contextLabel = document.createElement('div');
-  contextLabel.className = 'ai-section-label';
-  contextLabel.textContent = 'Context';
-
-  const summary = document.createElement('div');
-  summary.className = 'ai-context';
-  summary.textContent = parsed.summary;
-
-  const customerInfoLabel = document.createElement('div');
-  customerInfoLabel.className = 'ai-section-label';
-  customerInfoLabel.textContent = 'Customer Info';
-
-  const customerInfo = document.createElement('div');
-  customerInfo.className = 'ai-context';
-  customerInfo.textContent = parsed.customerInfo;
-  customerInfo.style.display = parsed.customerInfo ? 'block' : 'none';
-  customerInfoLabel.style.display = parsed.customerInfo ? 'block' : 'none';
-
-  const suggestionLabel = document.createElement('div');
-  suggestionLabel.className = 'ai-section-label';
-  suggestionLabel.textContent = 'Suggestion';
-
-  const content = document.createElement('div');
-  content.className = 'ai-suggestion';
-  content.textContent = parsed.suggestion;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'copy-button';
-  copyBtn.textContent = 'Copy';
-  copyBtn.onclick = () => {
-    navigator.clipboard.writeText(parsed.suggestion);
-    copyBtn.textContent = 'Copied!';
-    setTimeout(() => {
-      copyBtn.textContent = 'Copy';
-    }, 2000);
-  };
-
-  card.appendChild(contextLabel);
-  card.appendChild(summary);
-  card.appendChild(customerInfoLabel);
-  card.appendChild(customerInfo);
-  card.appendChild(suggestionLabel);
-  card.appendChild(content);
-  card.appendChild(copyBtn);
-  container.appendChild(card);
+  const card = createAiResponseCard(msg.utteranceId || `stored-${Date.now()}-${Math.random()}`, {
+    collapsed: true,
+  });
+  card.fullText = msg.text || '';
+  updateAiCardContent(card, parseAiSections(card.fullText));
+  container.appendChild(card.element);
 }
 
 async function initializePanel() {
-  const messages = await loadStoredMessages();
+  const [messages] = await Promise.all([
+    loadStoredMessages(),
+    loadStoredChatMessages(),
+  ]);
   renderStoredMessages(messages);
+  renderStoredChatMessages();
+  setActivePanelTab(activePanelTab, { persist: false });
 
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (response) {
       updateCaptureUI(response.active);
+      updateCaptureModeUI(response.captureMode);
     }
   });
 }
 
 initializePanel();
+
+callTabBtn.addEventListener('click', () => {
+  setActivePanelTab('call');
+});
+
+chatTabBtn.addEventListener('click', () => {
+  setActivePanelTab('chat');
+});
 
 toggleBtn.addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'TOGGLE_CAPTURE' }, (response) => {
@@ -113,11 +115,42 @@ toggleBtn.addEventListener('click', () => {
   });
 });
 
+captureModeBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'TOGGLE_CAPTURE_MODE' }, (response) => {
+    if (chrome.runtime.lastError || !response) {
+      return;
+    }
+    if (!response.success) {
+      alert(response.error || 'Unable to switch mode while capture is running.');
+      return;
+    }
+    updateCaptureModeUI(response.captureMode);
+  });
+});
+
 clearBtn.addEventListener('click', () => {
   container.innerHTML = '';
   currentCard = null;
   aiCards.clear();
   chrome.runtime.sendMessage({ type: 'CLEAR_MESSAGES' }, () => {});
+});
+
+clearChatBtn.addEventListener('click', async () => {
+  chatMessages = [];
+  renderStoredChatMessages();
+  await chrome.storage.local.remove(['chatMessages']);
+});
+
+chatForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  await sendChatMessage();
+});
+
+chatInput.addEventListener('keydown', async (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    await sendChatMessage();
+  }
 });
 
 summaryBtn.addEventListener('click', async () => {
@@ -173,13 +206,163 @@ function updateCaptureUI(isActive) {
   }
 }
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'TRANSCRIPT_UPDATE') {
-    const { transcript, isFinal, metadata } = message;
+function updateCaptureModeUI(mode) {
+  const isRtcMode = mode === 'rtc';
+  captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
+}
+
+function setActivePanelTab(tab, options = {}) {
+  activePanelTab = tab === 'chat' ? 'chat' : 'call';
+  callTabBtn.classList.toggle('active', activePanelTab === 'call');
+  chatTabBtn.classList.toggle('active', activePanelTab === 'chat');
+  callView.classList.toggle('active', activePanelTab === 'call');
+  chatView.classList.toggle('active', activePanelTab === 'chat');
+
+  if (activePanelTab === 'call') {
+    scrollToBottom();
+  } else {
+    scrollChatToBottom();
+    setTimeout(() => chatInput.focus(), 0);
+  }
+
+  if (options.persist !== false) {
+    persistActivePanelTab().catch(() => {});
+  }
+}
+
+function renderStoredChatMessages() {
+  chatLog.innerHTML = '';
+  if (!chatMessages.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chat-empty';
+    empty.textContent = 'Start a chat to ask the assistant anything.';
+    chatLog.appendChild(empty);
+    return;
+  }
+
+  for (const message of chatMessages) {
+    chatLog.appendChild(createChatMessageElement(message.role, message.content).element);
+  }
+  scrollChatToBottom();
+}
+
+function createChatMessageElement(role, content, loading = false) {
+  const el = document.createElement('div');
+  el.className = `chat-message ${role === 'user' ? 'user' : 'assistant'}`;
+  if (loading) {
+    el.classList.add('loading');
+  }
+
+  const label = document.createElement('div');
+  label.className = 'chat-role';
+  label.textContent = role === 'user' ? 'You' : 'Assistant';
+
+  const text = document.createElement('div');
+  text.className = 'chat-text';
+  text.textContent = content || '';
+
+  el.appendChild(label);
+  el.appendChild(text);
+
+  return { element: el, text };
+}
+
+function scrollChatToBottom() {
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function sendChatMessage() {
+  if (chatSending) {
+    return;
+  }
+
+  const text = chatInput.value.trim();
+  if (!text) {
+    return;
+  }
+
+  chatInput.value = '';
+  const userMessage = { role: 'user', content: text, timestamp: Date.now() };
+  chatMessages.push(userMessage);
+  chatLog.innerHTML = '';
+  renderStoredChatMessages();
+  await persistChatMessages().catch(() => {});
+
+  const assistantBubble = createChatMessageElement('assistant', 'Thinking...', true);
+  chatLog.appendChild(assistantBubble.element);
+  scrollChatToBottom();
+
+  chatSending = true;
+  chatSendBtn.disabled = true;
+
+  try {
+    const history = chatMessages.map((item) => ({
+      role: item.role,
+      content: item.content,
+    }));
+
+    const response = await new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'CHAT_SEND',
+          message: text,
+          history,
+        },
+        (reply) => resolve(reply),
+      );
+    });
+
+    const replyText = response?.reply?.reply || response?.reply || response?.text || '';
+    if (!replyText) {
+      throw new Error(response?.error || 'Empty reply');
+    }
+
+    assistantBubble.element.classList.remove('loading');
+    assistantBubble.text.textContent = replyText;
+    chatMessages.push({
+      role: 'assistant',
+      content: replyText,
+      timestamp: Date.now(),
+    });
+    await persistChatMessages().catch(() => {});
+  } catch (err) {
+    assistantBubble.element.classList.add('loading');
+    assistantBubble.text.textContent = `Failed to get chat reply: ${err.message}`;
+  } finally {
+    chatSending = false;
+    chatSendBtn.disabled = false;
+    scrollChatToBottom();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// onMessage router
+// ---------------------------------------------------------------------------
+
+const SIDEPANEL_MESSAGE_HANDLERS = {
+  TRANSCRIPT_UPDATE(message) {
+    const { transcript, isFinal, metadata, speaker } = message;
+    const speakerLabel = resolveSpeakerLabel(speaker, metadata);
+    const now = Date.now();
+    const canMergePending =
+      pendingMergeCard
+      && pendingMergeCard.speakerLabel === speakerLabel
+      && now - pendingMergeAt <= 1800;
 
     if (!currentCard && transcript.trim()) {
-      const utteranceId = `u-${Date.now()}`;
-      currentCard = createUtteranceCard(utteranceId);
+      if (canMergePending) {
+        currentCard = pendingMergeCard;
+        pendingMergeCard = null;
+        reviveCard(currentCard);
+      } else {
+        currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
+        container.appendChild(currentCard.element);
+      }
+    } else if (currentCard && transcript.trim() && speakerLabel !== currentCard.speakerLabel) {
+      finalizeCard(currentCard);
+      pendingMergeCard = currentCard;
+      pendingMergeAt = Date.now();
+      currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
       container.appendChild(currentCard.element);
     }
 
@@ -188,6 +371,8 @@ chrome.runtime.onMessage.addListener((message) => {
         appendFinalToCard(currentCard, transcript);
         if (metadata && metadata.speech_final) {
           finalizeCard(currentCard);
+          pendingMergeCard = currentCard;
+          pendingMergeAt = Date.now();
           currentCard = null;
         }
       } else {
@@ -195,60 +380,65 @@ chrome.runtime.onMessage.addListener((message) => {
       }
       scrollToBottom();
     }
-  }
+  },
 
-  if (message.type === 'AI_RESPONSE_CHUNK') {
+  AI_RESPONSE_CHUNK(message) {
     const { utteranceId, text, isDone, finalText } = message;
     let aiCard = aiCards.get(utteranceId);
-
     if (!aiCard) {
+      collapseOtherAiCards(utteranceId);
       aiCard = createAiResponseCard(utteranceId);
       aiCards.set(utteranceId, aiCard);
       container.appendChild(aiCard.element);
     }
-
-    if (text) {
-      appendChunkToAiCard(aiCard, text);
-    }
-
+    if (text) appendChunkToAiCard(aiCard, text);
     if (isDone) {
-      if (finalText) {
-        replaceAiCardWithFinalText(aiCard, finalText);
-      }
+      if (finalText) replaceAiCardWithFinalText(aiCard, finalText);
       finalizeAiCard(aiCard);
     }
     scrollToBottom();
-  }
+  },
 
-  if (message.type === 'CAPTURE_STATUS_CHANGED') {
-    updateCaptureUI(message.active);
-  }
+  CAPTURE_STATUS_CHANGED(message) { updateCaptureUI(message.active); },
+  CAPTURE_MODE_CHANGED(message)   { updateCaptureModeUI(message.captureMode); },
 
-  if (message.type === 'UTTERANCE_END') {
+  UTTERANCE_END() {
     if (currentCard) {
       finalizeCard(currentCard);
+      pendingMergeCard = currentCard;
+      pendingMergeAt = Date.now();
       currentCard = null;
     }
-  }
+  },
 
-  if (message.type === 'API_ERROR') {
-    addErrorToContainer(message.message, message.source);
-  }
+  API_ERROR(message) { addErrorToContainer(message.message, message.source); },
+};
+
+chrome.runtime.onMessage.addListener((message) => {
+  const handler = SIDEPANEL_MESSAGE_HANDLERS[message.type];
+  if (handler) handler(message);
 });
 
 function scrollToBottom() {
   container.scrollTop = container.scrollHeight;
 }
 
-function createUtteranceCard(id) {
+function createUtteranceCard(id, speakerLabel = 'Customer') {
   const el = document.createElement('div');
   el.className = 'utterance-card';
+  const badge = document.createElement('div');
+  badge.className = `speaker-tag ${speakerLabel === 'Agent' ? 'agent' : 'customer'}`;
+  badge.textContent = speakerLabel;
+  const textWrap = document.createElement('div');
+  textWrap.className = 'utterance-text';
   const stable = document.createElement('span');
   const interim = document.createElement('span');
   interim.style.color = '#888';
-  el.appendChild(stable);
-  el.appendChild(interim);
-  return { element: el, stable, interim, id };
+  textWrap.appendChild(stable);
+  textWrap.appendChild(interim);
+  el.appendChild(badge);
+  el.appendChild(textWrap);
+  return { element: el, stable, interim, id, badge, speakerLabel };
 }
 
 function updateInterimInCard(card, text) {
@@ -272,25 +462,54 @@ function finalizeCard(card) {
   card.interim.textContent = '';
 }
 
-function createAiResponseCard(id) {
+function reviveCard(card) {
+  card.element.classList.remove('finalized');
+}
+
+function resolveSpeakerLabel(speaker, metadata) {
+  if (speaker === '1') {
+    return 'Agent';
+  }
+  if (speaker === '0') {
+    return 'Customer';
+  }
+  const channel = metadata?.channel;
+  if (channel === 'agent') {
+    return 'Agent';
+  }
+  return 'Customer';
+}
+
+function createAiResponseCard(id, options = {}) {
+  const collapsed = options.collapsed ?? false;
   const el = document.createElement('div');
   el.className = 'ai-response-card';
+  el.dataset.utteranceId = id;
 
-  const contextLabel = document.createElement('div');
-  contextLabel.className = 'ai-section-label loading';
-  contextLabel.textContent = 'Context';
+  const header = document.createElement('div');
+  header.className = 'ai-response-header';
 
-  const summary = document.createElement('div');
-  summary.className = 'ai-context';
+  const title = document.createElement('div');
+  title.className = 'ai-response-title';
+  title.textContent = 'AI Response';
+
+  const controls = document.createElement('div');
+  controls.className = 'ai-response-controls';
+
+  const collapseBtn = document.createElement('button');
+  collapseBtn.type = 'button';
+  collapseBtn.className = 'ai-collapse-button';
+  collapseBtn.textContent = 'Collapse';
+
+  const body = document.createElement('div');
+  body.className = 'ai-response-body';
 
   const customerInfoLabel = document.createElement('div');
   customerInfoLabel.className = 'ai-section-label loading';
   customerInfoLabel.textContent = 'Customer Info';
-  customerInfoLabel.style.display = 'none';
 
   const customerInfo = document.createElement('div');
   customerInfo.className = 'ai-context';
-  customerInfo.style.display = 'none';
 
   const suggestionLabel = document.createElement('div');
   suggestionLabel.className = 'ai-section-label loading';
@@ -299,36 +518,58 @@ function createAiResponseCard(id) {
   const content = document.createElement('div');
   content.className = 'ai-suggestion';
 
-  el.appendChild(contextLabel);
-  el.appendChild(summary);
-  el.appendChild(customerInfoLabel);
-  el.appendChild(customerInfo);
-  el.appendChild(suggestionLabel);
-  el.appendChild(content);
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'copy-button';
+  copyBtn.textContent = 'Copy';
 
-  return { element: el, contextLabel, summary, customerInfoLabel, customerInfo, suggestionLabel, content, id, fullText: '' };
+  controls.appendChild(collapseBtn);
+  controls.appendChild(copyBtn);
+  header.appendChild(title);
+  header.appendChild(controls);
+
+  body.appendChild(customerInfoLabel);
+  body.appendChild(customerInfo);
+  body.appendChild(suggestionLabel);
+  body.appendChild(content);
+
+  el.appendChild(header);
+  el.appendChild(body);
+
+  const card = {
+    element: el,
+    customerInfoLabel,
+    customerInfo,
+    suggestionLabel,
+    content,
+    copyBtn,
+    collapseBtn,
+    body,
+    id,
+    fullText: '',
+    collapsed: false,
+  };
+
+  collapseBtn.onclick = () => toggleAiCardCollapse(card);
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(card.content.textContent || '');
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => {
+      copyBtn.textContent = 'Copy';
+    }, 2000);
+  };
+
+  setAiCardCollapsed(card, collapsed);
+  return card;
 }
 
 function appendChunkToAiCard(card, text) {
   card.fullText += text;
   const parsed = parseAiSections(card.fullText);
-  card.summary.textContent = parsed.summary;
-  card.customerInfo.textContent = parsed.customerInfo;
-  card.customerInfo.style.display = parsed.customerInfo ? 'block' : 'none';
-  card.customerInfoLabel.style.display = parsed.customerInfo ? 'block' : 'none';
-  card.content.textContent = parsed.suggestion;
+  updateAiCardContent(card, parsed);
 }
 
 function replaceAiCardWithFinalText(card, finalText) {
   card.fullText = finalText;
-  card.summary.textContent = '';
-  card.customerInfo.textContent = '';
-  card.customerInfo.style.display = 'none';
-  card.customerInfoLabel.style.display = 'none';
-  card.content.textContent = '';
-  card.contextLabel.classList.add('loading');
-  card.customerInfoLabel.classList.add('loading');
-  card.suggestionLabel.classList.add('loading');
   appendChunkToAiCard(card, '');
 }
 
@@ -338,7 +579,7 @@ function parseAiSections(text) {
   // Support both [INFO] and [CUSTOMER_INFO]
   const customerInfoMatch = normalized.match(/\[INFO\](.*?)(?=\[CUSTOMER_INFO\]|\[SUGGESTION\]|\[ANSWER\]|$)/i)
     || normalized.match(/\[CUSTOMER_INFO\](.*?)(?=\[SUGGESTION\]|\[ANSWER\]|$)/i);
-  const suggestionMatch = normalized.match(/\[(?:SUGGESTION|ANSWER)\](.*)$/i);
+  const suggestionMatch = normalized.match(/\[(?:SUGGESTION|ANSWER)\](.*?)(?=\[INFO\]|\[CUSTOMER_INFO\]|$)/i);
 
   let summary = summaryMatch ? summaryMatch[1].trim() : '';
   let customerInfo = customerInfoMatch ? customerInfoMatch[1].trim() : '';
@@ -347,14 +588,12 @@ function parseAiSections(text) {
   summary = summary.replace(/^context:\s*/i, '').replace(/^topic:\s*/i, '').trim();
   customerInfo = customerInfo.replace(/^(customer\s*info:\s*|info:\s*)/i, '').trim();
   suggestion = suggestion.replace(/^suggestion:\s*/i, '').replace(/^answer:\s*/i, '').replace(/^topic:\s*/i, '').trim();
+  suggestion = suggestion.replace(/\{[^{}]*\}\s*$/, '').trim();
 
   if (summary && suggestion.startsWith(summary)) {
     suggestion = suggestion.slice(summary.length).trim();
   }
 
-  if (!summary) {
-    summary = 'Current customer discussion';
-  }
   if (!suggestion) {
     suggestion = 'Suggestion is being prepared.';
   }
@@ -363,21 +602,6 @@ function parseAiSections(text) {
 }
 
 function finalizeAiCard(card) {
-  if (!card.copyBtn) {
-    const btn = document.createElement('button');
-    btn.className = 'copy-button';
-    btn.textContent = 'Copy';
-    btn.onclick = () => {
-      navigator.clipboard.writeText(card.content.textContent);
-      btn.textContent = 'Copied!';
-      setTimeout(() => {
-        btn.textContent = 'Copy';
-      }, 2000);
-    };
-    card.element.appendChild(btn);
-    card.copyBtn = btn;
-  }
-
   if (!card.speakBtn && card.content.textContent.includes('Ask:')) {
     const speakBtn = document.createElement('button');
     speakBtn.className = 'copy-button';
@@ -391,9 +615,36 @@ function finalizeAiCard(card) {
   }
 }
 
+function updateAiCardContent(card, parsed) {
+  card.customerInfoLabel.classList.remove('loading');
+  card.suggestionLabel.classList.remove('loading');
+  card.customerInfoLabel.style.display = parsed.customerInfo ? 'block' : 'none';
+  card.customerInfo.textContent = parsed.customerInfo;
+  card.customerInfo.style.display = parsed.customerInfo ? 'block' : 'none';
+  card.content.textContent = parsed.suggestion;
+}
+
+function setAiCardCollapsed(card, collapsed) {
+  card.collapsed = collapsed;
+  card.element.classList.toggle('collapsed', collapsed);
+  card.collapseBtn.textContent = collapsed ? 'Expand' : 'Collapse';
+}
+
+function toggleAiCardCollapse(card) {
+  setAiCardCollapsed(card, !card.collapsed);
+}
+
+function collapseOtherAiCards(activeId) {
+  for (const [utteranceId, card] of aiCards.entries()) {
+    if (utteranceId !== activeId) {
+      setAiCardCollapsed(card, true);
+    }
+  }
+}
+
 function addErrorToContainer(msg, source) {
   const el = document.createElement('div');
-  el.style.cssText = 'background:#3a1e1e; border:1px solid #ff6b6b; padding:12px; border-radius:8px; color:#ff6b6b; font-size:0.9rem;';
+  el.className = 'error-card';
   el.textContent = `[${source}] Error: ${msg}`;
   container.appendChild(el);
   scrollToBottom();
