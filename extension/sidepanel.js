@@ -5,6 +5,10 @@ let pendingMergeCard = null;
 let pendingMergeAt = 0;
 const aiCards = new Map();
 const container = document.getElementById('transcript-container');
+const callTabBtn = document.getElementById('call-tab');
+const chatTabBtn = document.getElementById('chat-tab');
+const callView = document.getElementById('call-view');
+const chatView = document.getElementById('chat-view');
 const toggleBtn = document.getElementById('toggle-btn');
 const clearBtn = document.getElementById('clear-btn');
 const dot = document.getElementById('dot');
@@ -13,6 +17,15 @@ const summaryBtn = document.getElementById('summary-btn');
 const summaryModal = document.getElementById('summary-modal');
 const modalClose = document.getElementById('modal-close');
 const modalBody = document.getElementById('modal-body');
+const chatLog = document.getElementById('chat-log');
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const chatSendBtn = document.getElementById('chat-send-btn');
+const clearChatBtn = document.getElementById('clear-chat-btn');
+
+let activePanelTab = 'call';
+let chatMessages = [];
+let chatSending = false;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -20,6 +33,20 @@ async function loadStoredMessages() {
       resolve(response?.messages || []);
     });
   });
+}
+
+async function loadStoredChatMessages() {
+  const result = await chrome.storage.local.get(['chatMessages', 'activePanelTab']);
+  chatMessages = Array.isArray(result.chatMessages) ? result.chatMessages : [];
+  activePanelTab = result.activePanelTab === 'chat' ? 'chat' : 'call';
+}
+
+async function persistChatMessages() {
+  await chrome.storage.local.set({ chatMessages });
+}
+
+async function persistActivePanelTab() {
+  await chrome.storage.local.set({ activePanelTab });
 }
 
 function renderStoredMessages(messages) {
@@ -51,8 +78,13 @@ function renderStoredAiResponse(msg) {
 }
 
 async function initializePanel() {
-  const messages = await loadStoredMessages();
+  const [messages] = await Promise.all([
+    loadStoredMessages(),
+    loadStoredChatMessages(),
+  ]);
   renderStoredMessages(messages);
+  renderStoredChatMessages();
+  setActivePanelTab(activePanelTab, { persist: false });
 
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (response) {
@@ -63,6 +95,14 @@ async function initializePanel() {
 }
 
 initializePanel();
+
+callTabBtn.addEventListener('click', () => {
+  setActivePanelTab('call');
+});
+
+chatTabBtn.addEventListener('click', () => {
+  setActivePanelTab('chat');
+});
 
 toggleBtn.addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'TOGGLE_CAPTURE' }, (response) => {
@@ -93,6 +133,24 @@ clearBtn.addEventListener('click', () => {
   currentCard = null;
   aiCards.clear();
   chrome.runtime.sendMessage({ type: 'CLEAR_MESSAGES' }, () => {});
+});
+
+clearChatBtn.addEventListener('click', async () => {
+  chatMessages = [];
+  renderStoredChatMessages();
+  await chrome.storage.local.remove(['chatMessages']);
+});
+
+chatForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  await sendChatMessage();
+});
+
+chatInput.addEventListener('keydown', async (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    await sendChatMessage();
+  }
 });
 
 summaryBtn.addEventListener('click', async () => {
@@ -151,6 +209,130 @@ function updateCaptureUI(isActive) {
 function updateCaptureModeUI(mode) {
   const isRtcMode = mode === 'rtc';
   captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
+}
+
+function setActivePanelTab(tab, options = {}) {
+  activePanelTab = tab === 'chat' ? 'chat' : 'call';
+  callTabBtn.classList.toggle('active', activePanelTab === 'call');
+  chatTabBtn.classList.toggle('active', activePanelTab === 'chat');
+  callView.classList.toggle('active', activePanelTab === 'call');
+  chatView.classList.toggle('active', activePanelTab === 'chat');
+
+  if (activePanelTab === 'call') {
+    scrollToBottom();
+  } else {
+    scrollChatToBottom();
+    setTimeout(() => chatInput.focus(), 0);
+  }
+
+  if (options.persist !== false) {
+    persistActivePanelTab().catch(() => {});
+  }
+}
+
+function renderStoredChatMessages() {
+  chatLog.innerHTML = '';
+  if (!chatMessages.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chat-empty';
+    empty.textContent = 'Start a chat to ask the assistant anything.';
+    chatLog.appendChild(empty);
+    return;
+  }
+
+  for (const message of chatMessages) {
+    chatLog.appendChild(createChatMessageElement(message.role, message.content).element);
+  }
+  scrollChatToBottom();
+}
+
+function createChatMessageElement(role, content, loading = false) {
+  const el = document.createElement('div');
+  el.className = `chat-message ${role === 'user' ? 'user' : 'assistant'}`;
+  if (loading) {
+    el.classList.add('loading');
+  }
+
+  const label = document.createElement('div');
+  label.className = 'chat-role';
+  label.textContent = role === 'user' ? 'You' : 'Assistant';
+
+  const text = document.createElement('div');
+  text.className = 'chat-text';
+  text.textContent = content || '';
+
+  el.appendChild(label);
+  el.appendChild(text);
+
+  return { element: el, text };
+}
+
+function scrollChatToBottom() {
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function sendChatMessage() {
+  if (chatSending) {
+    return;
+  }
+
+  const text = chatInput.value.trim();
+  if (!text) {
+    return;
+  }
+
+  chatInput.value = '';
+  const userMessage = { role: 'user', content: text, timestamp: Date.now() };
+  chatMessages.push(userMessage);
+  chatLog.innerHTML = '';
+  renderStoredChatMessages();
+  await persistChatMessages().catch(() => {});
+
+  const assistantBubble = createChatMessageElement('assistant', 'Thinking...', true);
+  chatLog.appendChild(assistantBubble.element);
+  scrollChatToBottom();
+
+  chatSending = true;
+  chatSendBtn.disabled = true;
+
+  try {
+    const history = chatMessages.map((item) => ({
+      role: item.role,
+      content: item.content,
+    }));
+
+    const response = await new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'CHAT_SEND',
+          message: text,
+          history,
+        },
+        (reply) => resolve(reply),
+      );
+    });
+
+    const replyText = response?.reply?.reply || response?.reply || response?.text || '';
+    if (!replyText) {
+      throw new Error(response?.error || 'Empty reply');
+    }
+
+    assistantBubble.element.classList.remove('loading');
+    assistantBubble.text.textContent = replyText;
+    chatMessages.push({
+      role: 'assistant',
+      content: replyText,
+      timestamp: Date.now(),
+    });
+    await persistChatMessages().catch(() => {});
+  } catch (err) {
+    assistantBubble.element.classList.add('loading');
+    assistantBubble.text.textContent = `Failed to get chat reply: ${err.message}`;
+  } finally {
+    chatSending = false;
+    chatSendBtn.disabled = false;
+    scrollChatToBottom();
+  }
 }
 
 // ---------------------------------------------------------------------------

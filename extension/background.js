@@ -169,6 +169,30 @@ function handleGenerateSummary(message, sender, sendResponse) {
   return true;
 }
 
+function handleChatSend(message, sender, sendResponse) {
+  const payload = {
+    message: message.message || '',
+    history: Array.isArray(message.history) ? message.history : []
+  };
+
+  fetch(`${CONFIG.BACKEND_HTTP_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      sendResponse({ reply: data.reply || '' });
+    })
+    .catch((err) => {
+      sendResponse({ error: err.message });
+    });
+  return true;
+}
+
 function handleSessionReady(message) {
   setCurrentSessionId(message.sessionId || null).then(() => {
     chrome.runtime.sendMessage({
@@ -246,6 +270,7 @@ const MESSAGE_HANDLERS = {
   LOAD_MESSAGES: handleLoadMessages,
   CLEAR_MESSAGES: handleClearMessages,
   GENERATE_SUMMARY: handleGenerateSummary,
+  CHAT_SEND: handleChatSend,
   // Relay messages from offscreen/content scripts
   SESSION_READY: handleSessionReady,
   TRANSCRIPT_RECEIVED: handleTranscriptReceived,

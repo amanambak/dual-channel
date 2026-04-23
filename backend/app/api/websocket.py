@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -14,6 +14,16 @@ schema_registry = get_schema_registry()
 
 class SummaryRequest(BaseModel):
     conversation: str
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[ChatTurn] = Field(default_factory=list)
 
 
 @router.websocket("/ws/session")
@@ -51,3 +61,12 @@ async def ad_hoc_summary(request: SummaryRequest) -> dict:
         if key in schema_registry.fields
     }
     return {"customer_info": filtered}
+
+
+@router.post("/api/chat")
+async def chat_reply(request: ChatRequest) -> dict:
+    reply = await llm_service.generate_chat_reply(
+        message=request.message,
+        history=[turn.model_dump() for turn in request.history],
+    )
+    return {"reply": reply}
