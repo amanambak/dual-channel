@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     llm_extract_model: str = "gemini-3.1-flash-lite-preview"
     request_timeout_seconds: float = 60.0
 
+    # RAG Settings
+    chroma_db_path: str = "chroma_db"
+    embedding_model: str = "gemini-embedding-2"
+    rag_top_k: int = 5
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

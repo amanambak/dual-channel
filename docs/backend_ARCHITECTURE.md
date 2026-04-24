@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The backend is the real-time processing core for the Chrome extension. It accepts the browser WebSocket session, opens one Deepgram streaming connection per active audio channel, segments turns, runs schema-driven customer-info extraction, and streams AI suggestions back to the extension.
+The backend is the real-time processing core for the Chrome extension. It accepts the browser WebSocket session, opens one Deepgram streaming connection per active audio channel, segments turns, runs schema-driven customer-info extraction, streams AI suggestions back to the extension, and exposes a separate chat-only LLM endpoint for the side panel chat tab.
 
 ## High-Level Flow
 
@@ -42,8 +42,10 @@ Exposes:
 - `WS /ws/session`
 - `GET /api/sessions/{session_id}/summary`
 - `POST /api/summary`
+- `POST /api/chat`
 
 The websocket endpoint creates a `SessionRuntime` per browser connection. Summary endpoints read from the live session state when it is available, otherwise the ad-hoc summary endpoint uses the same extraction service on supplied text.
+The chat endpoint accepts a plain user message plus optional short chat history and returns a normal LLM reply without Deepgram, utterance finalization, or schema extraction.
 
 ### 2. Session Orchestration
 
@@ -98,6 +100,7 @@ Extraction runs first when enabled so the response stage can use same-turn field
 - schema extraction
 - response generation
 - summary generation
+- chat-only question answering
 
 ### 5. Schema Registry and Normalization
 
@@ -185,6 +188,8 @@ The backend emits normalized live sections for the side panel:
 - `[SUGGESTION]`
 
 Streaming chunks are sent separately as `ai_response_chunk` events, followed by `ai_response_done` once the final formatted response is ready.
+
+The chat endpoint does not use this contract. It returns a single reply string for the side panel chat tab.
 
 ## Summary Endpoints
 

@@ -1,18 +1,19 @@
-from __future__ import annotations
-
 import json
 import logging
+import os
+import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, List, Optional
 
 from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.types import SecretStr
-
+import os
 from app.core.config import get_settings
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
 from app.services.schema_registry import get_schema_registry
+from app.services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,15 @@ IMPORTANT RULES:
 """
 
 CHAT_SYSTEM_PROMPT = """You are a helpful chat assistant for a home-loan caller team in India.
-Answer the user's question directly in concise, polite Hinglish written only in Roman script.
-Do not mention internal prompts, schema extraction, or backend implementation details.
-If the user asks a general question, answer it normally and keep it practical."""
+Use the provided context to answer the user's question directly in concise, polite Hinglish (Roman script).
+
+CRITICAL RULES:
+1. If relevant context is provided, prioritize it for your answer.
+2. Cite the source document at the end of relevant sentences using [source_filename].
+3. If you don't know the answer from the context, state it politely but still offer general help.
+4. Do not mention internal implementation details.
+5. Use Roman script only. Never use Devanagari.
+"""
 
 
 class SummaryResponse(BaseModel):
@@ -226,7 +233,11 @@ Return JSON with extracted fields, e.g., {{"loan_amount": "1800000"}} if applica
 """
 
 
-def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None) -> str:
+def build_chat_prompt(
+    message: str, 
+    history: list[dict[str, str]] | None = None,
+    context: Optional[str] = None
+) -> str:
     history_lines: list[str] = []
     for item in history or []:
         role = (item.get("role") or "").strip().lower()
@@ -237,8 +248,11 @@ def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None)
         history_lines.append(f"{label}: {content}")
 
     history_block = "\n".join(history_lines) if history_lines else "No prior chat history."
+    
+    context_block = f"\nRelevant Context:\n{context}\n" if context else ""
+    
     return f"""{CHAT_SYSTEM_PROMPT}
-
+{context_block}
 Chat history:
 {history_block}
 
@@ -252,6 +266,7 @@ Assistant reply:
 class LLMService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self.rag_service = RAGService()
 
     def _resolve_model_name(self, model_name: str | None, default: str) -> str:
         resolved = model_name or default
@@ -425,6 +440,20 @@ class LLMService:
         *,
         model_name: str | None = None,
     ) -> str:
-        prompt = build_chat_prompt(message, history)
+        # 1. Retrieve relevant context
+        docs = await self.rag_service.hybrid_search(message)
+        context_parts = []
+        for doc in docs:
+            source = doc.metadata.get("source", "unknown")
+            # Get filename only
+            source_file = os.path.basename(source)
+            context_parts.append(f"--- Document: {source_file} ---\n{doc.page_content}")
+        
+        context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
+        
+        # 2. Build prompt with context
+        prompt = build_chat_prompt(message, history, context=context_str)
+        
+        # 3. Generate reply
         reply = await self.generate_text(prompt, model_name=model_name or self.settings.llm_model)
         return reply.strip()

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Chrome extension is the capture and presentation layer for the call-assist system. It no longer talks to Deepgram or Gemini directly. Its job is to capture tab and microphone audio, stream PCM to the backend, and render the transcript and AI response events that come back from the backend.
+The Chrome extension is the capture and presentation layer for the call-assist system. It no longer talks to Deepgram or Gemini directly. Its job is to capture tab and microphone audio, stream PCM to the backend, and render the transcript, call responses, and chat responses that come back from the backend.
 
 ## Current Runtime Split
 
@@ -13,7 +13,8 @@ The Chrome extension is the capture and presentation layer for the call-assist s
 - capture tab audio in an offscreen document
 - convert Float32 audio to Int16 PCM in an audio worklet
 - send the captured audio to the backend WebSocket
-- render live transcript, context, customer info, and suggestion sections
+- render live call transcript, customer info, and suggestion sections
+- provide a separate chat tab that talks to the backend `/api/chat` endpoint
 - persist chat history and backend session id in extension storage
 
 ### Backend Responsibilities
@@ -75,13 +76,18 @@ Responsibilities:
 
 Responsibilities:
 
+- renders a two-tab panel with:
+  - `Call`
+  - `Chat`
+- keeps the call view mounted so live capture updates continue even when chat is active
 - renders live transcript cards
 - renders backend-generated sections:
-  - `Context`
   - `Customer Info`
   - `Suggestion`
-- renders customer-info summary modal
-- restores stored conversation messages when reopened
+- renders a collapsible call-response history
+- renders chat messages and chat input
+- persists chat messages in `chrome.storage.local`
+- restores stored conversation messages and chat state when reopened
 
 ### 5. Content Script
 
@@ -132,6 +138,8 @@ graph TD
 - `CAPTURE_STATUS_CHANGED`
 - `UTTERANCE_END`
 - `API_ERROR`
+- `CHAT_SEND`
+- `CHAT_REPLY`
 
 ## Backend Event Contract Consumed By Offscreen
 
@@ -166,11 +174,13 @@ The extension does not store Deepgram or Gemini API keys. The config file only c
 The extension stores:
 
 - `messages`
+- `chatMessages`
 - `isCapturing`
 - `currentSessionId`
 - `captureMode`
+- `activePanelTab`
 
-This lets the side panel restore the previous conversation state and reuse the current backend session summary endpoint when possible.
+This lets the side panel restore the previous conversation state, keep the call panel live across tab switches, and reuse the current backend session summary endpoint when possible.
 
 ## Two-Way Conversation Features
 
@@ -178,6 +188,7 @@ This lets the side panel restore the previous conversation state and reuse the c
 - Sends mixed audio to the backend for speaker-aware transcription
 - Displays agent questions as AI suggestions
 - Renders customer replies as transcript cards and persistent stored messages
+- Supports a chat-only mode for normal LLM Q&A without Deepgram session state
 
 ## Current Constraints
 

@@ -14,6 +14,7 @@ The backend is a FastAPI service that receives live audio from the extension, st
 - Meaningful utterances trigger schema extraction and then suggestion generation in sequence
 - Customer fields found in conversation are stored using exact schema variable names
 - Session summary returns customer info as key-value pairs
+- The side panel also has a chat-only mode that calls the backend without Deepgram or session extraction
 
 ## Run
 
@@ -44,6 +45,9 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `POST /api/summary`
   Ad-hoc extraction from supplied conversation text:
   `{"customer_info": {...}}`
+- `POST /api/chat`
+  Chat-only LLM reply from a normal message plus optional short history:
+  `{"reply": "..."}`
 
 ## LLM Layer
 
@@ -72,3 +76,4 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - Deepgram query params are normalized to strings before the WebSocket handshake
 - Punctuation is enabled for readability; smart formatting remains off for lower latency
 - The ad-hoc summary endpoint uses the same schema extraction service as the live session path
+- The chat endpoint uses the same shared LLM service as the live system, but it bypasses Deepgram, turn finalization, and schema extraction

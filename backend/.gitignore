@@ -18,3 +18,5 @@ venv/
 .planning/
 customer_info.json
 home_loan_schema.csv
+/chroma_db/
+
