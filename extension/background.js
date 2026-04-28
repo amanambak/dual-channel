@@ -4,6 +4,7 @@
 importScripts('config.js');
 
 let isCapturing = false;
+let isAgentMicPaused = false;
 let targetTabId = null;
 let currentSessionId = null;
 let captureMode = 'gmeet';
@@ -62,15 +63,23 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 // Restore persisted state on service-worker startup (single read is cheaper).
-chrome.storage.local.get(['isCapturing', 'currentSessionId', 'captureMode'], (result) => {
+chrome.storage.local.get(['isCapturing', 'isAgentMicPaused', 'currentSessionId', 'captureMode'], (result) => {
   isCapturing = result.isCapturing || false;
+  isAgentMicPaused = result.isAgentMicPaused || false;
   currentSessionId = result.currentSessionId || null;
   captureMode = result.captureMode === 'rtc' ? 'rtc' : 'gmeet';
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ isCapturing: false, messages: [], currentSessionId: null, captureMode: 'gmeet' });
+  chrome.storage.local.set({
+    isCapturing: false,
+    isAgentMicPaused: false,
+    messages: [],
+    currentSessionId: null,
+    captureMode: 'gmeet'
+  });
   isCapturing = false;
+  isAgentMicPaused = false;
   captureMode = 'gmeet';
 
   chrome.contextMenus.create({
@@ -93,14 +102,40 @@ chrome.contextMenus.onClicked.addListener((info) => {
 
 function handleGetStatus(message, sender, sendResponse) {
   getCurrentSessionId().then((sessionId) => {
-    sendResponse({ active: isCapturing, sessionId, captureMode });
+    sendResponse({ active: isCapturing, agentMicPaused: isAgentMicPaused, sessionId, captureMode });
   });
   return true;
 }
 
 function handleToggleCapture(message, sender, sendResponse) {
   handleToggleCapture_internal().then((active) => {
-    sendResponse({ active, sessionId: currentSessionId, captureMode });
+    sendResponse({ active, agentMicPaused: isAgentMicPaused, sessionId: currentSessionId, captureMode });
+  });
+  return true;
+}
+
+function handleToggleAgentMicPause(message, sender, sendResponse) {
+  if (!isCapturing) {
+    isAgentMicPaused = false;
+    chrome.storage.local.set({ isAgentMicPaused }).then(() => {
+      sendResponse({ success: false, active: false, agentMicPaused: false });
+    });
+    return true;
+  }
+
+  isAgentMicPaused = !isAgentMicPaused;
+  chrome.storage.local.set({ isAgentMicPaused }).then(() => {
+    chrome.runtime.sendMessage({
+      type: 'SET_AGENT_MIC_PAUSED',
+      paused: isAgentMicPaused,
+      offscreen: true
+    }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: isCapturing,
+      agentMicPaused: isAgentMicPaused
+    }).catch(() => {});
+    sendResponse({ success: true, active: isCapturing, agentMicPaused: isAgentMicPaused });
   });
   return true;
 }
@@ -185,7 +220,7 @@ function handleSummaryChat(message, sender, sendResponse) {
         throw new Error(`HTTP ${response.status}`);
       }
       const data = await response.json();
-      sendResponse({ reply: data.reply || '' });
+      sendResponse({ reply: data.reply || '', customer_info: data.customer_info || {} });
     })
     .catch((err) => {
       sendResponse({ error: err.message });
@@ -290,6 +325,7 @@ function handleApiError(message) {
 const MESSAGE_HANDLERS = {
   GET_STATUS: handleGetStatus,
   TOGGLE_CAPTURE: handleToggleCapture,
+  TOGGLE_AGENT_MIC_PAUSE: handleToggleAgentMicPause,
   TOGGLE_CAPTURE_MODE: handleToggleCaptureMode,
   LOAD_MESSAGES: handleLoadMessages,
   CLEAR_MESSAGES: handleClearMessages,
@@ -358,18 +394,28 @@ async function startCapture() {
     }, 250);
 
     isCapturing = true;
-    await chrome.storage.local.set({ isCapturing: true });
-    chrome.runtime.sendMessage({ type: 'CAPTURE_STATUS_CHANGED', active: true }).catch(() => {});
+    isAgentMicPaused = false;
+    await chrome.storage.local.set({ isCapturing: true, isAgentMicPaused: false });
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: true,
+      agentMicPaused: false
+    }).catch(() => {});
   } catch (err) {
     isCapturing = false;
+    isAgentMicPaused = false;
     await setCurrentSessionId(null);
-    await chrome.storage.local.set({ isCapturing: false });
+    await chrome.storage.local.set({ isCapturing: false, isAgentMicPaused: false });
     chrome.runtime.sendMessage({
       type: 'API_ERROR',
       source: 'Background',
       message: `Failed to start capture: ${err.message}`
     }).catch(() => {});
-    chrome.runtime.sendMessage({ type: 'CAPTURE_STATUS_CHANGED', active: false }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: false,
+      agentMicPaused: false
+    }).catch(() => {});
   }
 }
 
@@ -384,9 +430,14 @@ async function stopCapture() {
     console.warn('[stopCapture] Error during teardown:', err.message);
   } finally {
     isCapturing = false;
+    isAgentMicPaused = false;
     targetTabId = null;
-    await chrome.storage.local.set({ isCapturing: false });
-    chrome.runtime.sendMessage({ type: 'CAPTURE_STATUS_CHANGED', active: false }).catch(() => {});
+    await chrome.storage.local.set({ isCapturing: false, isAgentMicPaused: false });
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: false,
+      agentMicPaused: false
+    }).catch(() => {});
   }
 }
 

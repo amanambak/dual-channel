@@ -10,6 +10,7 @@ const chatTabBtn = document.getElementById('chat-tab');
 const callView = document.getElementById('call-view');
 const chatView = document.getElementById('chat-view');
 const toggleBtn = document.getElementById('toggle-btn');
+const pauseAgentBtn = document.getElementById('pause-agent-btn');
 const clearBtn = document.getElementById('clear-btn');
 const dot = document.getElementById('dot');
 const captureModeBtn = document.getElementById('capture-mode-btn');
@@ -90,6 +91,7 @@ async function initializePanel() {
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (response) {
       updateCaptureUI(response.active);
+      updateAgentMicPauseUI(response.agentMicPaused, response.active);
       updateCaptureModeUI(response.captureMode);
     }
   });
@@ -112,7 +114,17 @@ toggleBtn.addEventListener('click', () => {
     }
     if (response) {
       updateCaptureUI(response.active);
+      updateAgentMicPauseUI(response.agentMicPaused, response.active);
     }
+  });
+});
+
+pauseAgentBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'TOGGLE_AGENT_MIC_PAUSE' }, (response) => {
+    if (chrome.runtime.lastError || !response) {
+      return;
+    }
+    updateAgentMicPauseUI(response.agentMicPaused, response.active);
   });
 });
 
@@ -205,6 +217,12 @@ function updateCaptureUI(isActive) {
     toggleBtn.classList.remove('active');
     dot.classList.remove('active');
   }
+}
+
+function updateAgentMicPauseUI(isPaused, isActive = true) {
+  pauseAgentBtn.disabled = !isActive;
+  pauseAgentBtn.classList.toggle('paused', Boolean(isPaused));
+  pauseAgentBtn.textContent = isPaused ? 'Resume Mic' : 'Pause Mic';
 }
 
 function updateCaptureModeUI(mode) {
@@ -430,7 +448,10 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
     scrollToBottom();
   },
 
-  CAPTURE_STATUS_CHANGED(message) { updateCaptureUI(message.active); },
+  CAPTURE_STATUS_CHANGED(message) {
+    updateCaptureUI(message.active);
+    updateAgentMicPauseUI(message.agentMicPaused, message.active);
+  },
   CAPTURE_MODE_CHANGED(message)   { updateCaptureModeUI(message.captureMode); },
 
   UTTERANCE_END() {

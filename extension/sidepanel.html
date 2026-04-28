@@ -127,12 +127,47 @@
       color: white;
       box-shadow: 0 10px 24px rgba(31, 122, 61, 0.28);
     }
+    .capture-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .capture-controls .control-btn {
+      margin: 0;
+    }
+    .pause-btn {
+      min-width: 112px;
+      padding: 11px 12px;
+      border: 1px solid rgba(251, 191, 36, 0.32);
+      border-radius: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      font-size: 0.86rem;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease;
+      background: linear-gradient(135deg, #b45309, #f59e0b);
+      color: #fffaf0;
+      box-shadow: 0 10px 24px rgba(245, 158, 11, 0.22);
+    }
+    .pause-btn.paused {
+      background: linear-gradient(135deg, #0f766e, #14b8a6);
+      border-color: rgba(45, 212, 191, 0.32);
+      box-shadow: 0 10px 24px rgba(20, 184, 166, 0.22);
+    }
+    .pause-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+      box-shadow: none;
+      transform: none;
+    }
     .control-btn.active {
       background: linear-gradient(135deg, #b4233e, #ef4444);
       box-shadow: 0 10px 24px rgba(180, 35, 62, 0.28);
     }
     .control-btn:hover,
     .control-btn:focus-visible,
+    .pause-btn:hover:not(:disabled),
+    .pause-btn:focus-visible:not(:disabled),
     .summary-btn:hover,
     .summary-btn:focus-visible,
     .clear-btn:hover,
@@ -144,6 +179,7 @@
       transform: translateY(-1px);
     }
     .control-btn:focus-visible,
+    .pause-btn:focus-visible,
     .summary-btn:focus-visible,
     .clear-btn:focus-visible,
     .modal-close:focus-visible,
@@ -185,6 +221,15 @@
     .summary-btn:hover {
       background: linear-gradient(135deg, #0f5aa6, #177ecb);
     }
+    #mic-permission-btn {
+      background: linear-gradient(135deg, #c2410c, #f97316);
+      border-color: rgba(251, 146, 60, 0.28);
+      box-shadow: 0 10px 24px rgba(249, 115, 22, 0.22);
+    }
+    #mic-permission-btn:hover,
+    #mic-permission-btn:focus-visible {
+      background: linear-gradient(135deg, #9a3412, #ea580c);
+    }
     .summary-btn:disabled {
       background: linear-gradient(135deg, #4b5563, #64748b);
       cursor: not-allowed;
@@ -197,6 +242,16 @@
     }
     .action-buttons button {
       flex: 1;
+    }
+    .secondary-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .secondary-actions .mode-btn,
+    .secondary-actions .summary-btn {
+      margin-top: 0;
     }
     .clear-btn {
       background: none;
@@ -760,13 +815,18 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
         </button>
       </div>
-      <button id="toggle-btn" class="control-btn">Start Capture</button>
-      <button id="capture-mode-btn" class="mode-btn">Mode: Google Meet</button>
+      <div class="capture-controls">
+        <button id="toggle-btn" class="control-btn">Start Capture</button>
+        <button id="pause-agent-btn" class="pause-btn" disabled>Pause Mic</button>
+      </div>
+      <div class="secondary-actions">
+        <button id="capture-mode-btn" class="mode-btn">Mode: Google Meet</button>
+        <button id="mic-permission-btn" class="summary-btn">
+          🎤 Mic Permission
+        </button>
+      </div>
       <button id="summary-btn" class="summary-btn">
         <span id="summary-btn-text">📊 Generate Summary & Insights</span>
-      </button>
-      <button id="mic-permission-btn" class="summary-btn" style="background-color: #ff9800;">
-        🎤 Grant Microphone Permission
       </button>
     </div>
     <div id="transcript-container"></div>
