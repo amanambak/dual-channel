@@ -26,6 +26,7 @@ const clearChatBtn = document.getElementById('clear-chat-btn');
 let activePanelTab = 'call';
 let chatMessages = [];
 let chatSending = false;
+let latestSummary = null;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -241,12 +242,14 @@ function renderStoredChatMessages() {
   }
 
   for (const message of chatMessages) {
-    chatLog.appendChild(createChatMessageElement(message.role, message.content).element);
+    chatLog.appendChild(
+      createChatMessageElement(message.role, message.content, false, message.details).element,
+    );
   }
   scrollChatToBottom();
 }
 
-function createChatMessageElement(role, content, loading = false) {
+function createChatMessageElement(role, content, loading = false, details = null) {
   const el = document.createElement('div');
   el.className = `chat-message ${role === 'user' ? 'user' : 'assistant'}`;
   if (loading) {
@@ -264,7 +267,35 @@ function createChatMessageElement(role, content, loading = false) {
   el.appendChild(label);
   el.appendChild(text);
 
+  if (details && typeof details === 'object' && Object.keys(details).length > 0) {
+    el.appendChild(createKeyValueCard(details));
+  }
+
   return { element: el, text };
+}
+
+function createKeyValueCard(details) {
+  const card = document.createElement('div');
+  card.className = 'chat-kv-card';
+
+  for (const [key, value] of Object.entries(details)) {
+    const row = document.createElement('div');
+    row.className = 'chat-kv-row';
+
+    const keyEl = document.createElement('div');
+    keyEl.className = 'chat-kv-key';
+    keyEl.textContent = key;
+
+    const valueEl = document.createElement('div');
+    valueEl.className = 'chat-kv-value';
+    valueEl.textContent = String(value);
+
+    row.appendChild(keyEl);
+    row.appendChild(valueEl);
+    card.appendChild(row);
+  }
+
+  return card;
 }
 
 function scrollChatToBottom() {
@@ -650,7 +681,86 @@ function addErrorToContainer(msg, source) {
   scrollToBottom();
 }
 
+function buildSummaryFieldMessage(customerInfo) {
+  const entries = Object.entries(customerInfo || {});
+  if (!entries.length) {
+    return 'No extracted fields were found.';
+  }
+
+  const lines = entries.map(([key, value]) => `${key}: ${value}`);
+  return `Extracted fields ready for database review:\n${lines.join('\n')}`;
+}
+
+async function sendSummaryToChat() {
+  const customerInfo = latestSummary?.customer_info || {};
+  const entries = Object.entries(customerInfo);
+
+  if (!entries.length) {
+    alert('No extracted fields available to send to chat.');
+    return;
+  }
+
+  setActivePanelTab('chat');
+  summaryModal.classList.remove('active');
+
+  const userText = buildSummaryFieldMessage(customerInfo);
+  chatMessages.push({
+    role: 'user',
+    content: userText,
+    timestamp: Date.now(),
+  });
+  renderStoredChatMessages();
+  await persistChatMessages().catch(() => {});
+
+  const assistantBubble = createChatMessageElement('assistant', 'Thinking...', true);
+  chatLog.appendChild(assistantBubble.element);
+  scrollChatToBottom();
+
+  chatSending = true;
+  chatSendBtn.disabled = true;
+
+  try {
+    const response = await new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'SUMMARY_CHAT_SEND',
+          customerInfo,
+          conversation: userText,
+        },
+        (reply) => resolve(reply),
+      );
+    });
+
+    const replyText = response?.reply || response?.error || '';
+    const filteredCustomerInfo = response?.customer_info || {};
+    if (!replyText && Object.keys(filteredCustomerInfo).length === 0) {
+      throw new Error('Empty reply');
+    }
+
+    assistantBubble.element.classList.remove('loading');
+    assistantBubble.text.textContent = replyText || 'Filtered data ready for insertion.';
+    if (Object.keys(filteredCustomerInfo).length > 0) {
+      assistantBubble.element.appendChild(createKeyValueCard(filteredCustomerInfo));
+    }
+    chatMessages.push({
+      role: 'assistant',
+      content: assistantBubble.text.textContent,
+      details: filteredCustomerInfo,
+      timestamp: Date.now(),
+    });
+    await persistChatMessages().catch(() => {});
+  } catch (err) {
+    assistantBubble.element.classList.add('loading');
+    assistantBubble.text.textContent = `Failed to prepare database question: ${err.message}`;
+  } finally {
+    chatSending = false;
+    chatSendBtn.disabled = false;
+    scrollChatToBottom();
+  }
+}
+
 function displaySummary(summary) {
+  latestSummary = summary || null;
   const customerInfo = summary?.customer_info || {};
   const entries = Object.entries(customerInfo);
 
@@ -665,7 +775,23 @@ function displaySummary(summary) {
           </div>
         </div>
       </div>
+      <div class="summary-actions">
+        <button id="summary-send-btn" class="summary-secondary-btn" type="button">
+          Send to Chat
+        </button>
+        <div class="summary-actions-note">
+          Returns the recommended extracted field(s) to insert into the database.
+        </div>
+      </div>
     `;
+    const button = document.getElementById('summary-send-btn');
+    if (button) {
+      button.onclick = () => {
+        sendSummaryToChat().catch((err) => {
+          alert(`Failed to send summary to chat: ${err.message}`);
+        });
+      };
+    }
     summaryModal.classList.add('active');
     return;
   }
@@ -682,7 +808,23 @@ function displaySummary(summary) {
       <h3>Customer Info</h3>
       <div class="summary-card">${html}</div>
     </div>
+      <div class="summary-actions">
+        <button id="summary-send-btn" class="summary-secondary-btn" type="button">
+          Send to Chat
+        </button>
+        <div class="summary-actions-note">
+          Returns the recommended extracted field(s) to insert into the database.
+        </div>
+      </div>
   `;
+  const button = document.getElementById('summary-send-btn');
+  if (button) {
+    button.onclick = () => {
+      sendSummaryToChat().catch((err) => {
+        alert(`Failed to send summary to chat: ${err.message}`);
+      });
+    };
+  }
   summaryModal.classList.add('active');
 }
 

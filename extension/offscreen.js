@@ -214,7 +214,7 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
         type: 'start_session',
         config: {
           deepgramParams: params,
-          geminiModel: CONFIG.GEMINI_MODEL || null,
+          modelOverride: CONFIG.LLM_MODEL || null,
           captureMode,
           channels: hasMicChannel ? ['customer', 'agent'] : ['customer']
         }

@@ -4,6 +4,7 @@
 
 - [Backend Architecture](./backend_ARCHITECTURE.md)
 - [Extension Architecture](./extension_ARCHITECTURE.md)
+- [RAG Pipeline](./RAG_PIPELINE.md)
 
 ## Runtime Notes
 
@@ -13,4 +14,3 @@
 ## Historical Notes
 
 - [LLM Migration Plan](./LLM_MIGRATION_PLAN.md)
-

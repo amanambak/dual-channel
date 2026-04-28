@@ -38,7 +38,7 @@ Recommended live values:
 - `encoding: 'linear16'`
 - `sample_rate: 16000`
 
-Do not set Deepgram or Gemini API keys in the extension. The backend owns those integrations.
+Do not set Deepgram or LLM API keys in the extension. The backend owns those integrations.
 
 ## UI Contract
 

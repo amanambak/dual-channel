@@ -169,6 +169,30 @@ function handleGenerateSummary(message, sender, sendResponse) {
   return true;
 }
 
+function handleSummaryChat(message, sender, sendResponse) {
+  const payload = {
+    customer_info: message.customerInfo || {},
+    conversation: message.conversation || '',
+  };
+
+  fetch(`${CONFIG.BACKEND_HTTP_URL}/api/summary/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      sendResponse({ reply: data.reply || '' });
+    })
+    .catch((err) => {
+      sendResponse({ error: err.message });
+    });
+  return true;
+}
+
 function handleChatSend(message, sender, sendResponse) {
   const payload = {
     message: message.message || '',
@@ -270,6 +294,7 @@ const MESSAGE_HANDLERS = {
   LOAD_MESSAGES: handleLoadMessages,
   CLEAR_MESSAGES: handleClearMessages,
   GENERATE_SUMMARY: handleGenerateSummary,
+  SUMMARY_CHAT_SEND: handleSummaryChat,
   CHAT_SEND: handleChatSend,
   // Relay messages from offscreen/content scripts
   SESSION_READY: handleSessionReady,

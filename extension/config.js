@@ -14,5 +14,5 @@ const CONFIG = {
     sample_rate: 16000
   },
 
-  GEMINI_MODEL: 'gemini-3.1-flash-lite-preview',
+  LLM_MODEL: 'gpt-5.4',
 };

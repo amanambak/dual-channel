@@ -27,7 +27,7 @@ graph TD
     API2 --> LC
     LC -->|stream chunks| GR
     GR -->|ai_response_chunk / ai_response_done| SR
-    SR -->|normalized [SUMMARY]/[INFO]/[SUGGESTION]| EXT
+    SR -->|normalized SUMMARY/INFO/SUGGESTION| EXT
     SR --> SUM[Session summary APIs]
 ```
 

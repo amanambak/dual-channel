@@ -253,6 +253,28 @@ def _normalize_boolean_value(candidate: str) -> str | None:
 
 
 def _normalize_integer_value(candidate: str) -> str | None:
+    cleaned = candidate.replace(",", "").strip()
+    match = re.search(
+        r"(?P<number>-?\d+(?:\.\d+)?)\s*(?P<unit>crore|cr|lakh|lac|lakhs|lacs|thousand|k|l)?\b",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        number = match.group("number")
+        unit = (match.group("unit") or "").lower()
+        try:
+            numeric_value = float(number)
+        except ValueError:
+            numeric_value = None
+        if numeric_value is not None:
+            if unit in {"crore", "cr"}:
+                numeric_value *= 10000000
+            elif unit in {"lakh", "lac", "lakhs", "lacs", "l"}:
+                numeric_value *= 100000
+            elif unit in {"thousand", "k"}:
+                numeric_value *= 1000
+            return str(int(numeric_value)) if numeric_value.is_integer() else str(numeric_value)
+
     normalized = _extract_numeric_token(candidate)
     if normalized is None:
         return None
@@ -260,6 +282,28 @@ def _normalize_integer_value(candidate: str) -> str | None:
 
 
 def _normalize_number_value(candidate: str) -> str | None:
+    cleaned = candidate.replace(",", "").strip()
+    match = re.search(
+        r"(?P<number>-?\d+(?:\.\d+)?)\s*(?P<unit>crore|cr|lakh|lac|lakhs|lacs|thousand|k|l)?\b",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        number = match.group("number")
+        unit = (match.group("unit") or "").lower()
+        try:
+            numeric_value = float(number)
+        except ValueError:
+            numeric_value = None
+        if numeric_value is not None:
+            if unit in {"crore", "cr"}:
+                numeric_value *= 10000000
+            elif unit in {"lakh", "lac", "lakhs", "lacs", "l"}:
+                numeric_value *= 100000
+            elif unit in {"thousand", "k"}:
+                numeric_value *= 1000
+            return str(int(numeric_value)) if numeric_value.is_integer() else str(numeric_value)
+
     normalized = _extract_numeric_token(candidate)
     if normalized is None:
         return None

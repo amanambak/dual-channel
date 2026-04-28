@@ -53,7 +53,7 @@ Responsibilities:
 - opens the backend WebSocket session at `CONFIG.BACKEND_WS_URL`
 - sends a `start_session` payload containing:
   - `deepgramParams`
-  - `geminiModel`
+  - `modelOverride`
   - `captureMode`
   - channel layout
 - forwards backend transcript and AI events back into extension runtime messages
@@ -165,9 +165,9 @@ Important keys:
 - `BACKEND_WS_URL`
 - `BACKEND_HTTP_URL`
 - `DEEPGRAM_PARAMS`
-- `GEMINI_MODEL`
+- `LLM_MODEL`
 
-The extension does not store Deepgram or Gemini API keys. The config file only controls capture parameters and backend endpoints.
+The extension does not store Deepgram or LLM API keys. The config file only controls capture parameters, optional model override defaults, and backend endpoints.
 
 ## Storage
 
