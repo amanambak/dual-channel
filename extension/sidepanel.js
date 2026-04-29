@@ -32,6 +32,9 @@ let activePanelTab = 'call';
 let chatMessages = [];
 let chatSending = false;
 let latestSummary = null;
+let latestLeadDetail = null;
+let latestLeadId = null;
+let latestLeadFacts = null;
 let leadDetailLookupTimer = null;
 let leadDetailRequestId = 0;
 
@@ -291,6 +294,9 @@ async function refreshLeadDetailStatus(url) {
 
   if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
     updateLeadDetailStatus('Lead detail check will run on Ambak lead pages.');
+    latestLeadDetail = null;
+    latestLeadId = null;
+    latestLeadFacts = null;
     renderLeadDetailData(null);
     return;
   }
@@ -309,15 +315,24 @@ async function refreshLeadDetailStatus(url) {
 
   if (response.error) {
     updateLeadDetailStatus(`Lead detail API check failed: ${response.error}`, 'error');
+    latestLeadDetail = null;
+    latestLeadId = null;
+    latestLeadFacts = null;
     renderLeadDetailData(null);
     return;
   }
   if (response.skipped) {
     updateLeadDetailStatus(response.reason || 'Lead detail check skipped.');
+    latestLeadDetail = null;
+    latestLeadId = null;
+    latestLeadFacts = null;
     renderLeadDetailData(null);
     return;
   }
 
+  latestLeadDetail = response.detail || null;
+  latestLeadId = response.leadId || null;
+  latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
   updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
   renderLeadDetailData(response.detail);
 }
@@ -528,6 +543,11 @@ async function sendChatMessage() {
       role: item.role,
       content: item.content,
     }));
+    const storedLead = await chrome.storage.local
+      .get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts'])
+      .catch(() => ({}));
+    const leadDetailForChat = latestLeadDetail || storedLead.currentLeadDetail || null;
+    const leadFactsForChat = latestLeadFacts || storedLead.currentLeadFacts || LeadDetailApi.buildLeadFacts(leadDetailForChat);
 
     const response = await new Promise((resolve) => {
       chrome.runtime.sendMessage(
@@ -535,6 +555,9 @@ async function sendChatMessage() {
           type: 'CHAT_SEND',
           message: text,
           history,
+          lead_id: latestLeadId || storedLead.currentLeadId || null,
+          lead_detail: leadDetailForChat,
+          lead_facts: leadFactsForChat,
         },
         (reply) => resolve(reply),
       );

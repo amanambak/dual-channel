@@ -1,3 +1,6 @@
+import logging
+from typing import Any
+
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 from fastapi import WebSocket, WebSocketDisconnect
@@ -11,6 +14,7 @@ router = APIRouter()
 session_manager = SessionManager()
 llm_service = LLMService()
 schema_registry = get_schema_registry()
+logger = logging.getLogger(__name__)
 
 
 class SummaryRequest(BaseModel):
@@ -22,14 +26,27 @@ class SummaryChatRequest(BaseModel):
     conversation: str = ""
 
 
-class ChatTurn(BaseModel):
-    role: str
-    content: str
-
-
 class ChatRequest(BaseModel):
-    message: str
-    history: list[ChatTurn] = Field(default_factory=list)
+    message: Any = ""
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    lead_id: Any = None
+    leadId: Any = None
+    lead_detail: Any = None
+    leadDetail: Any = None
+    lead_facts: Any = None
+    leadFacts: Any = None
+
+
+def _normalize_chat_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for turn in history:
+        if not isinstance(turn, dict):
+            continue
+        role = str(turn.get("role") or "").strip()
+        content = str(turn.get("content") or "").strip()
+        if role and content:
+            normalized.append({"role": role, "content": content})
+    return normalized
 
 
 @router.websocket("/ws/session")
@@ -82,8 +99,27 @@ async def summary_chat(request: SummaryChatRequest) -> dict:
 
 @router.post("/api/chat")
 async def chat_reply(request: ChatRequest) -> dict:
-    reply = await llm_service.generate_chat_reply(
-        message=request.message,
-        history=[turn.model_dump() for turn in request.history],
+    lead_id = request.lead_id or request.leadId
+    lead_detail = request.lead_detail or request.leadDetail
+    lead_facts = request.lead_facts or request.leadFacts
+    if not isinstance(lead_detail, dict):
+        lead_detail = None
+    if not isinstance(lead_facts, dict):
+        lead_facts = None
+
+    logger.info(
+        "Chat request lead context: lead_id=%s has_detail=%s has_facts=%s history_turns=%d",
+        lead_id,
+        bool(lead_detail),
+        bool(lead_facts),
+        len(request.history),
     )
-    return {"reply": reply}
+
+    reply = await llm_service.generate_chat_reply(
+        message=str(request.message or ""),
+        history=_normalize_chat_history(request.history),
+        lead_id=lead_id,
+        lead_detail=lead_detail,
+        lead_facts=lead_facts,
+    )
+    return {"reply": reply, "lead_id": lead_id, "lead_context_used": bool(lead_detail or lead_facts)}

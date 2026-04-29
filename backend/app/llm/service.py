@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.types import SecretStr
 
 from app.core.config import get_settings
+from app.services.lead_detail_context import build_lead_detail_chat_context
+from app.services.lead_detail_context import find_direct_lead_detail_answer
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
 from app.services.schema_registry import get_schema_registry
@@ -235,7 +237,8 @@ Return JSON with extracted fields, e.g., {{"loan_amount": "1800000"}} if applica
 def build_chat_prompt(
     message: str, 
     history: list[dict[str, str]] | None = None,
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    lead_context: Optional[str] = None,
 ) -> str:
     history_lines: list[str] = []
     for item in history or []:
@@ -248,7 +251,14 @@ def build_chat_prompt(
 
     history_block = "\n".join(history_lines) if history_lines else "No prior chat history."
     
-    context_block = f"\nRelevant Context:\n{context}\n" if context else ""
+    context_sections = []
+    if lead_context:
+        context_sections.append(f"Loaded Lead Details:\n{lead_context}")
+    if context:
+        context_sections.append(f"Relevant Policy Context:\n{context}")
+    context_block = "\n\n".join(context_sections)
+    if context_block:
+        context_block = f"\n{context_block}\n"
     
     return f"""{CHAT_SYSTEM_PROMPT}
 {context_block}
@@ -298,7 +308,13 @@ Task:
 class LLMService:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.rag_service = RAGService()
+        self._rag_service: RAGService | None = None
+
+    @property
+    def rag_service(self) -> RAGService:
+        if self._rag_service is None:
+            self._rag_service = RAGService()
+        return self._rag_service
 
     def _resolve_model_name(self, model_name: str | None, default: str) -> str:
         resolved = model_name or default
@@ -490,10 +506,24 @@ class LLMService:
         message: str,
         history: list[dict[str, str]] | None = None,
         *,
+        lead_id: str | int | None = None,
+        lead_detail: dict | None = None,
+        lead_facts: dict | None = None,
         model_name: str | None = None,
     ) -> str:
         timings: dict[str, float] = {}
         overall_start = time.perf_counter()
+        searchable_lead_detail = lead_detail or lead_facts
+
+        direct_lead_answer = find_direct_lead_detail_answer(message, searchable_lead_detail)
+        if direct_lead_answer:
+            logger.info(
+                "Lead chat direct answer completed: lead_id=%s total_ms=%.2f reply_chars=%d",
+                lead_id,
+                (time.perf_counter() - overall_start) * 1000.0,
+                len(direct_lead_answer),
+            )
+            return direct_lead_answer
 
         # 1. Retrieve relevant context
         retrieval_start = time.perf_counter()
@@ -506,10 +536,19 @@ class LLMService:
             context_parts.append(doc.page_content)
         
         context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
+        lead_context = build_lead_detail_chat_context(
+            lead_id=lead_id,
+            lead_detail=searchable_lead_detail,
+        )
         
         # 2. Build prompt with context
         prompt_start = time.perf_counter()
-        prompt = build_chat_prompt(message, history, context=context_str)
+        prompt = build_chat_prompt(
+            message,
+            history,
+            context=context_str,
+            lead_context=lead_context,
+        )
         timings["prompt_ms"] = (time.perf_counter() - prompt_start) * 1000.0
         logger.info(
             "RAG prompt prepared: message_len=%d history_turns=%d context_chars=%d prompt_chars=%d prompt_ms=%.2f",

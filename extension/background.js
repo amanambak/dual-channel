@@ -228,23 +228,59 @@ function handleSummaryChat(message, sender, sendResponse) {
   return true;
 }
 
-function handleChatSend(message, sender, sendResponse) {
-  const payload = {
-    message: message.message || '',
-    history: Array.isArray(message.history) ? message.history : []
-  };
+async function loadLeadDetailForChat(message, stored) {
+  if (message.lead_detail || message.leadDetail || stored.currentLeadDetail || message.lead_facts || message.leadFacts || stored.currentLeadFacts) {
+    const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || null;
+    return {
+      leadId: message.lead_id || message.leadId || stored.currentLeadId || null,
+      detail,
+      facts: message.lead_facts || message.leadFacts || stored.currentLeadFacts || LeadDetailApi.buildLeadFacts(detail),
+    };
+  }
 
-  fetch(`${CONFIG.BACKEND_HTTP_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  })
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = message.url || tab?.url || tab?.pendingUrl || '';
+  if (!tab?.id || !LeadDetailApi.isLoanDetailUrl(url)) {
+    return { leadId: stored.currentLeadId || null, detail: stored.currentLeadDetail || null, facts: stored.currentLeadFacts || null };
+  }
+
+  await ensureContentScriptInjected(tab.id);
+  const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
+  const leadId = message.lead_id || message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
+  const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
+  const facts = LeadDetailApi.buildLeadFacts(result.detail);
+  await chrome.storage.local.set({ currentLeadDetail: result.detail, currentLeadId: result.leadId, currentLeadFacts: facts });
+  return { leadId: result.leadId, detail: result.detail, facts };
+}
+
+function handleChatSend(message, sender, sendResponse) {
+  chrome.storage.local.get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts'])
+    .then(async (stored) => {
+      const lead = await loadLeadDetailForChat(message, stored);
+      const payload = {
+        message: message.message || '',
+        history: Array.isArray(message.history) ? message.history : [],
+        lead_id: lead.leadId || null,
+        lead_detail: lead.detail || null,
+        lead_facts: lead.facts || null,
+      };
+
+      return fetch(`${CONFIG.BACKEND_HTTP_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       const data = await response.json();
-      sendResponse({ reply: data.reply || '' });
+      sendResponse({
+        reply: data.reply || '',
+        lead_id: data.lead_id || null,
+        lead_context_used: Boolean(data.lead_context_used),
+      });
     })
     .catch((err) => {
       sendResponse({ error: err.message });
@@ -270,7 +306,11 @@ function handleGetLeadDetail(message, sender, sendResponse) {
       const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
       const leadId = message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
       const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
-      await chrome.storage.local.set({ currentLeadDetail: result.detail, currentLeadId: result.leadId });
+      await chrome.storage.local.set({
+        currentLeadDetail: result.detail,
+        currentLeadId: result.leadId,
+        currentLeadFacts: LeadDetailApi.buildLeadFacts(result.detail),
+      });
       sendResponse({ success: true, leadId: result.leadId, detail: result.detail });
     } catch (err) {
       sendResponse({ error: err.message });
