@@ -37,6 +37,8 @@ let latestLeadId = null;
 let latestLeadFacts = null;
 let leadDetailLookupTimer = null;
 let leadDetailRequestId = 0;
+let lastLeadLookupKey = '';
+let leadLookupInFlightKey = '';
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -114,7 +116,7 @@ chrome.tabs.onActivated.addListener(() => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') {
+  if (changeInfo.url) {
     refreshCurrentTabUrl();
   }
 });
@@ -277,8 +279,26 @@ function updateCurrentTabUrl(url) {
   scheduleLeadDetailLookup(url);
 }
 
+function buildLeadLookupKey(url) {
+  if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
+    return '';
+  }
+  const leadId = LeadDetailApi.extractLeadIdFromUrl(url) || '';
+  try {
+    const parsedUrl = new URL(url);
+    return `${parsedUrl.origin}${parsedUrl.pathname}?lead_id=${leadId}`;
+  } catch (err) {
+    return url;
+  }
+}
+
 function scheduleLeadDetailLookup(url) {
   if (!leadDetailStatus) {
+    return;
+  }
+
+  const lookupKey = buildLeadLookupKey(url);
+  if (lookupKey && (lookupKey === lastLeadLookupKey || lookupKey === leadLookupInFlightKey)) {
     return;
   }
 
@@ -291,8 +311,11 @@ function scheduleLeadDetailLookup(url) {
 async function refreshLeadDetailStatus(url) {
   const requestId = leadDetailRequestId + 1;
   leadDetailRequestId = requestId;
+  const lookupKey = buildLeadLookupKey(url);
 
   if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
+    lastLeadLookupKey = '';
+    leadLookupInFlightKey = '';
     updateLeadDetailStatus('Lead detail check will run on Ambak lead pages.');
     latestLeadDetail = null;
     latestLeadId = null;
@@ -300,6 +323,12 @@ async function refreshLeadDetailStatus(url) {
     renderLeadDetailData(null);
     return;
   }
+
+  if (lookupKey && (lookupKey === lastLeadLookupKey || lookupKey === leadLookupInFlightKey)) {
+    return;
+  }
+
+  leadLookupInFlightKey = lookupKey;
 
   updateLeadDetailStatus('Checking lead details from API...', 'loading');
   renderLeadDetailData(null);
@@ -314,6 +343,7 @@ async function refreshLeadDetailStatus(url) {
   }
 
   if (response.error) {
+    leadLookupInFlightKey = '';
     updateLeadDetailStatus(`Lead detail API check failed: ${response.error}`, 'error');
     latestLeadDetail = null;
     latestLeadId = null;
@@ -322,6 +352,7 @@ async function refreshLeadDetailStatus(url) {
     return;
   }
   if (response.skipped) {
+    leadLookupInFlightKey = '';
     updateLeadDetailStatus(response.reason || 'Lead detail check skipped.');
     latestLeadDetail = null;
     latestLeadId = null;
@@ -333,6 +364,8 @@ async function refreshLeadDetailStatus(url) {
   latestLeadDetail = response.detail || null;
   latestLeadId = response.leadId || null;
   latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
+  lastLeadLookupKey = lookupKey || buildLeadLookupKey(url);
+  leadLookupInFlightKey = '';
   updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
   renderLeadDetailData(response.detail);
 }
