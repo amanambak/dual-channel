@@ -23,11 +23,17 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send-btn');
 const clearChatBtn = document.getElementById('clear-chat-btn');
+const currentTabUrl = document.getElementById('current-tab-url');
+const currentTabUrlText = document.getElementById('current-tab-url-text');
+const leadDetailStatus = document.getElementById('lead-detail-status');
+const leadDetailData = document.getElementById('lead-detail-data');
 
 let activePanelTab = 'call';
 let chatMessages = [];
 let chatSending = false;
 let latestSummary = null;
+let leadDetailLookupTimer = null;
+let leadDetailRequestId = 0;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -83,6 +89,7 @@ async function initializePanel() {
   const [messages] = await Promise.all([
     loadStoredMessages(),
     loadStoredChatMessages(),
+    refreshCurrentTabUrl(),
   ]);
   renderStoredMessages(messages);
   renderStoredChatMessages();
@@ -98,6 +105,22 @@ async function initializePanel() {
 }
 
 initializePanel();
+
+chrome.tabs.onActivated.addListener(() => {
+  refreshCurrentTabUrl();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') {
+    refreshCurrentTabUrl();
+  }
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+    refreshCurrentTabUrl();
+  }
+});
 
 callTabBtn.addEventListener('click', () => {
   setActivePanelTab('call');
@@ -228,6 +251,162 @@ function updateAgentMicPauseUI(isPaused, isActive = true) {
 function updateCaptureModeUI(mode) {
   const isRtcMode = mode === 'rtc';
   captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
+}
+
+async function refreshCurrentTabUrl() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || tab?.pendingUrl || '';
+    updateCurrentTabUrl(url);
+  } catch (err) {
+    updateCurrentTabUrl('');
+  }
+}
+
+function updateCurrentTabUrl(url) {
+  if (!currentTabUrlText || !currentTabUrl) {
+    return;
+  }
+
+  const displayUrl = url || 'Current tab URL unavailable';
+  currentTabUrlText.textContent = displayUrl;
+  currentTabUrl.title = displayUrl;
+  scheduleLeadDetailLookup(url);
+}
+
+function scheduleLeadDetailLookup(url) {
+  if (!leadDetailStatus) {
+    return;
+  }
+
+  clearTimeout(leadDetailLookupTimer);
+  leadDetailLookupTimer = setTimeout(() => {
+    refreshLeadDetailStatus(url).catch(() => {});
+  }, 250);
+}
+
+async function refreshLeadDetailStatus(url) {
+  const requestId = leadDetailRequestId + 1;
+  leadDetailRequestId = requestId;
+
+  if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
+    updateLeadDetailStatus('Lead detail check will run on Ambak lead pages.');
+    renderLeadDetailData(null);
+    return;
+  }
+
+  updateLeadDetailStatus('Checking lead details from API...', 'loading');
+  renderLeadDetailData(null);
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', url }, (reply) => {
+      resolve(reply || {});
+    });
+  });
+
+  if (requestId !== leadDetailRequestId) {
+    return;
+  }
+
+  if (response.error) {
+    updateLeadDetailStatus(`Lead detail API check failed: ${response.error}`, 'error');
+    renderLeadDetailData(null);
+    return;
+  }
+  if (response.skipped) {
+    updateLeadDetailStatus(response.reason || 'Lead detail check skipped.');
+    renderLeadDetailData(null);
+    return;
+  }
+
+  updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
+  renderLeadDetailData(response.detail);
+}
+
+function formatLeadDetailStatus(leadId, detail) {
+  const customer = detail?.customer || {};
+  const leadDetails = detail?.lead_details || {};
+  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
+  const statusName = detail?.status_info?.statuslang?.status_name || '';
+  const loanAmount = leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '';
+  const parts = [`Lead ${leadId} details loaded`];
+  if (customerName) {
+    parts.push(customerName);
+  }
+  if (statusName) {
+    parts.push(statusName);
+  }
+  if (loanAmount) {
+    parts.push(`₹${loanAmount}`);
+  }
+  return parts.join(' · ');
+}
+
+function updateLeadDetailStatus(message, state = '') {
+  leadDetailStatus.textContent = message;
+  leadDetailStatus.classList.toggle('success', state === 'success');
+  leadDetailStatus.classList.toggle('error', state === 'error');
+  leadDetailStatus.classList.toggle('loading', state === 'loading');
+}
+
+function renderLeadDetailData(detail) {
+  if (!leadDetailData) {
+    return;
+  }
+  leadDetailData.innerHTML = '';
+  leadDetailData.classList.toggle('active', Boolean(detail));
+  if (!detail) {
+    return;
+  }
+
+  const customer = detail.customer || {};
+  const leadDetails = detail.lead_details || {};
+  const bankName = leadDetails.bank?.banklang?.bank_name || '';
+  const summary = {
+    Lead: detail.id || leadDetails.lead_id || '',
+    Customer: [customer.first_name, customer.last_name].filter(Boolean).join(' '),
+    Mobile: customer.mobile || '',
+    Email: customer.email || '',
+    Status: detail.status_info?.statuslang?.status_name || '',
+    Substatus: detail.sub_status_info?.substatuslang?.sub_status_name || '',
+    Bank: bankName,
+    Amount: leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '',
+  };
+
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'lead-detail-summary';
+  for (const [key, value] of Object.entries(summary)) {
+    if (!value) {
+      continue;
+    }
+    const row = document.createElement('div');
+    row.className = 'lead-detail-row';
+
+    const keyEl = document.createElement('div');
+    keyEl.className = 'lead-detail-key';
+    keyEl.textContent = key;
+
+    const valueEl = document.createElement('div');
+    valueEl.className = 'lead-detail-value';
+    valueEl.textContent = String(value);
+
+    row.appendChild(keyEl);
+    row.appendChild(valueEl);
+    summaryEl.appendChild(row);
+  }
+
+  const rawDetails = document.createElement('details');
+  rawDetails.className = 'lead-detail-json';
+
+  const rawSummary = document.createElement('summary');
+  rawSummary.textContent = 'View raw loaded data';
+
+  const rawJson = document.createElement('pre');
+  rawJson.textContent = JSON.stringify(detail, null, 2);
+
+  rawDetails.appendChild(rawSummary);
+  rawDetails.appendChild(rawJson);
+  leadDetailData.appendChild(summaryEl);
+  leadDetailData.appendChild(rawDetails);
 }
 
 function setActivePanelTab(tab, options = {}) {

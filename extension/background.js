@@ -1,7 +1,7 @@
 // background.js — Service Worker (MV3)
 // Orchestrates capture state, UI messages, and storage.
 
-importScripts('config.js');
+importScripts('config.js', 'lead-detail-api.js');
 
 let isCapturing = false;
 let isAgentMicPaused = false;
@@ -252,6 +252,35 @@ function handleChatSend(message, sender, sendResponse) {
   return true;
 }
 
+function handleGetLeadDetail(message, sender, sendResponse) {
+  chrome.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
+    const url = message.url || tab?.url || tab?.pendingUrl || '';
+    if (!LeadDetailApi.isLoanDetailUrl(url)) {
+      sendResponse({ skipped: true, reason: 'Current tab is not an Ambak loan detail page.' });
+      return;
+    }
+
+    if (!tab?.id) {
+      sendResponse({ error: 'Active tab is unavailable.' });
+      return;
+    }
+
+    try {
+      await ensureContentScriptInjected(tab.id);
+      const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
+      const leadId = message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
+      const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
+      await chrome.storage.local.set({ currentLeadDetail: result.detail, currentLeadId: result.leadId });
+      sendResponse({ success: true, leadId: result.leadId, detail: result.detail });
+    } catch (err) {
+      sendResponse({ error: err.message });
+    }
+  }).catch((err) => {
+    sendResponse({ error: err.message });
+  });
+  return true;
+}
+
 function handleSessionReady(message) {
   setCurrentSessionId(message.sessionId || null).then(() => {
     chrome.runtime.sendMessage({
@@ -332,6 +361,7 @@ const MESSAGE_HANDLERS = {
   GENERATE_SUMMARY: handleGenerateSummary,
   SUMMARY_CHAT_SEND: handleSummaryChat,
   CHAT_SEND: handleChatSend,
+  GET_LEAD_DETAIL: handleGetLeadDetail,
   // Relay messages from offscreen/content scripts
   SESSION_READY: handleSessionReady,
   TRANSCRIPT_RECEIVED: handleTranscriptReceived,

@@ -114,6 +114,105 @@
       font-weight: 700;
       letter-spacing: 0.01em;
     }
+    .current-tab-url {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 9px 11px;
+      border: 1px solid rgba(125, 211, 252, 0.18);
+      border-radius: 12px;
+      background: rgba(15, 23, 40, 0.62);
+      min-width: 0;
+    }
+    .current-tab-label {
+      color: var(--muted-strong);
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .current-tab-value {
+      color: var(--accent);
+      font-size: 0.78rem;
+      line-height: 1.35;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .lead-detail-status {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 9px 11px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 12px;
+      background: rgba(15, 23, 40, 0.48);
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+    .lead-detail-status.success {
+      border-color: rgba(74, 222, 128, 0.3);
+      color: #bbf7d0;
+    }
+    .lead-detail-status.error {
+      border-color: rgba(248, 113, 113, 0.34);
+      color: #fecaca;
+    }
+    .lead-detail-status.loading {
+      border-color: rgba(125, 211, 252, 0.24);
+      color: var(--accent);
+    }
+    .lead-detail-data {
+      display: none;
+      padding: 10px 11px;
+      border: 1px solid rgba(125, 211, 252, 0.16);
+      border-radius: 12px;
+      background: rgba(15, 23, 40, 0.58);
+      color: var(--text);
+      font-size: 0.76rem;
+      line-height: 1.4;
+      max-height: 260px;
+      overflow: auto;
+    }
+    .lead-detail-data.active {
+      display: block;
+    }
+    .lead-detail-summary {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .lead-detail-row {
+      display: grid;
+      grid-template-columns: 108px minmax(0, 1fr);
+      gap: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .lead-detail-key {
+      color: var(--muted-strong);
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .lead-detail-value {
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .lead-detail-json summary {
+      cursor: pointer;
+      color: var(--accent);
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .lead-detail-json pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      color: #dbeafe;
+      font-size: 0.72rem;
+    }
     .control-btn {
       width: 100%;
       padding: 11px 14px;
@@ -815,6 +914,12 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
         </button>
       </div>
+      <div id="current-tab-url" class="current-tab-url" title="Current tab URL">
+        <div class="current-tab-label">Current Tab URL</div>
+        <div id="current-tab-url-text" class="current-tab-value">Detecting current tab...</div>
+      </div>
+      <div id="lead-detail-status" class="lead-detail-status">Lead detail check will run on Ambak lead pages.</div>
+      <div id="lead-detail-data" class="lead-detail-data"></div>
       <div class="capture-controls">
         <button id="toggle-btn" class="control-btn">Start Capture</button>
         <button id="pause-agent-btn" class="pause-btn" disabled>Pause Mic</button>
@@ -864,6 +969,7 @@
     </div>
   </div>
 
+  <script src="lead-detail-api.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
