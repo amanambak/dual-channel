@@ -83,6 +83,15 @@ class SchemaExtractionSupport:
 
         return triggered_fields
 
+    def extract_location_value(self, text: str) -> str | None:
+        return self._extract_location_value(text)
+
+    def extract_pincode_value(self, text: str) -> str | None:
+        return self._extract_pincode_value(text)
+
+    def extract_cibil_value(self, text: str) -> str | None:
+        return self._extract_cibil_value(text)
+
     def _normalize_value(self, value: str) -> str:
         return re.sub(r"\s+", " ", value).strip(" ,.;:-")
 

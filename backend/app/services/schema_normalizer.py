@@ -67,15 +67,15 @@ def build_high_confidence_local_updates(text: str) -> dict[str, str]:
     normalized_text = re.sub(r"\s+", " ", text or "").lower()
     updates: dict[str, str] = {}
 
-    location = registry._extract_location_value(text)
+    location = registry.extract_location_value(text)
     if location:
         updates["property_city"] = location.lower()
 
-    pincode = registry._extract_pincode_value(text)
+    pincode = registry.extract_pincode_value(text)
     if pincode:
         updates["property_pincode"] = pincode
 
-    cibil_score = registry._extract_cibil_value(text)
+    cibil_score = registry.extract_cibil_value(text)
     if cibil_score:
         updates["cibil_score"] = cibil_score
 

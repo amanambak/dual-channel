@@ -38,6 +38,15 @@ class SchemaRegistry:
     def detect_triggered_fields(self, text: str, state: dict) -> list[str]:
         return self.extraction_support.detect_triggered_fields(text, state)
 
+    def extract_location_value(self, text: str) -> str | None:
+        return self.extraction_support.extract_location_value(text)
+
+    def extract_pincode_value(self, text: str) -> str | None:
+        return self.extraction_support.extract_pincode_value(text)
+
+    def extract_cibil_value(self, text: str) -> str | None:
+        return self.extraction_support.extract_cibil_value(text)
+
     def get_missing_fields(self, state: dict) -> dict[str, None]:
         filled_fields = set((state or {}).keys())
         return {field: None for field in self.fields if field not in filled_fields}

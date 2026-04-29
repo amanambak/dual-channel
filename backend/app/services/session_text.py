@@ -1,11 +1,19 @@
 import re
 import time
+from dataclasses import dataclass
 
 from app.models.session import SessionState
 
 
 NORMALIZE_REGEX_1 = re.compile(r"\s+")
 NORMALIZE_REGEX_2 = re.compile(r"[^a-z0-9 ]+")
+
+
+@dataclass(frozen=True)
+class TurnActionDecision:
+    run_extraction: bool
+    run_reply: bool
+    reason: str
 
 
 def normalize_text(text: str) -> str:
@@ -75,6 +83,24 @@ def should_extract_schema_fields(utterance: str, average_confidence: float) -> b
     return len(normalized.split()) >= 4 or any(char.isdigit() for char in utterance)
 
 
+def should_run_llm_extraction(
+    utterance: str,
+    average_confidence: float,
+    speaker: str | None,
+) -> bool:
+    if speaker == "1":
+        return False
+
+    normalized = normalize_text(utterance)
+    if not normalized or len(normalized) < 2:
+        return False
+    if looks_like_noise_or_filler(normalized):
+        return False
+    if average_confidence < 0.45:
+        return False
+    return True
+
+
 def should_invoke_llm(
     utterance: str, average_confidence: float, last_llm_invoked_at: float, cooldown: float
 ) -> bool:
@@ -104,6 +130,42 @@ def should_invoke_llm(
         return False
 
     return True
+
+
+def decide_turn_action(
+    utterance: str,
+    average_confidence: float,
+    speaker: str | None,
+    last_llm_invoked_at: float,
+    cooldown: float,
+) -> TurnActionDecision:
+    normalized = normalize_text(utterance)
+    if not normalized or len(normalized) < 2:
+        return TurnActionDecision(False, False, "empty_or_too_short")
+    if looks_like_noise_or_filler(normalized):
+        return TurnActionDecision(False, False, "noise_or_filler")
+
+    if speaker == "1":
+        return TurnActionDecision(False, False, "agent_context_only")
+
+    run_extraction = should_run_llm_extraction(utterance, average_confidence, speaker)
+    run_reply = should_invoke_llm(
+        utterance,
+        average_confidence,
+        last_llm_invoked_at,
+        cooldown,
+    )
+
+    if run_extraction and run_reply:
+        reason = "customer_extract_and_reply"
+    elif run_extraction:
+        reason = "customer_extract_only"
+    elif run_reply:
+        reason = "customer_reply_only"
+    else:
+        reason = "customer_no_action"
+
+    return TurnActionDecision(run_extraction, run_reply, reason)
 
 
 def build_turn_dedupe_key(utterance: str, speaker: str | None) -> str:
