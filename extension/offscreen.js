@@ -11,12 +11,15 @@ let backendSocket;
 let currentSessionId = null;
 let sendIntervalCustomer = null;
 let sendIntervalAgent = null;
+let isAgentMicPaused = false;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'START_CAPTURE' && message.offscreen) {
     startCapture(message.streamId, message.captureMode);
   } else if (message.type === 'STOP_CAPTURE' && message.offscreen) {
     stopCapture();
+  } else if (message.type === 'SET_AGENT_MIC_PAUSED' && message.offscreen) {
+    setAgentMicPaused(Boolean(message.paused));
   } else if (message.type === 'REQUEST_SUMMARY' && message.offscreen) {
     requestSummary(message.requestId);
   }
@@ -24,6 +27,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 async function startCapture(streamId, captureMode = 'gmeet') {
   try {
+    isAgentMicPaused = false;
     const shouldCaptureMic = captureMode === 'gmeet' || captureMode === 'rtc';
     let hasMicChannel = false;
 
@@ -103,8 +107,12 @@ async function startCapture(streamId, captureMode = 'gmeet') {
  * @param {number} intervalMs  - Polling interval in milliseconds
  * @returns {number} The interval ID (pass to clearInterval to stop it)
  */
-function createChannelSender(channelByte, buffer, intervalMs = 100) {
+function createChannelSender(channelByte, buffer, intervalMs = 100, shouldSkip = () => false) {
   return setInterval(() => {
+    if (shouldSkip()) {
+      buffer.length = 0;
+      return;
+    }
     if (buffer.length === 0 || !backendSocket || backendSocket.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -143,11 +151,21 @@ async function setupDualChannelWorklets(tabGain, micGain) {
     micGain.connect(workletAgent);
     const bufferAgent = [];
     workletAgent.port.onmessage = (event) => { bufferAgent.push(event.data); };
-    sendIntervalAgent = createChannelSender(1, bufferAgent);
+    sendIntervalAgent = createChannelSender(1, bufferAgent, 100, () => isAgentMicPaused);
+  }
+}
+
+function setAgentMicPaused(paused) {
+  isAgentMicPaused = paused;
+  if (micStream) {
+    micStream.getAudioTracks().forEach((track) => {
+      track.enabled = !paused;
+    });
   }
 }
 
 async function stopCapture() {
+  isAgentMicPaused = false;
   if (sendIntervalCustomer) {
     clearInterval(sendIntervalCustomer);
     sendIntervalCustomer = null;
@@ -214,7 +232,7 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
         type: 'start_session',
         config: {
           deepgramParams: params,
-          geminiModel: CONFIG.GEMINI_MODEL || null,
+          modelOverride: CONFIG.LLM_MODEL || null,
           captureMode,
           channels: hasMicChannel ? ['customer', 'agent'] : ['customer']
         }

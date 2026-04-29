@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -114,6 +114,105 @@
       font-weight: 700;
       letter-spacing: 0.01em;
     }
+    .current-tab-url {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 9px 11px;
+      border: 1px solid rgba(125, 211, 252, 0.18);
+      border-radius: 12px;
+      background: rgba(15, 23, 40, 0.62);
+      min-width: 0;
+    }
+    .current-tab-label {
+      color: var(--muted-strong);
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .current-tab-value {
+      color: var(--accent);
+      font-size: 0.78rem;
+      line-height: 1.35;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .lead-detail-status {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 9px 11px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 12px;
+      background: rgba(15, 23, 40, 0.48);
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+    .lead-detail-status.success {
+      border-color: rgba(74, 222, 128, 0.3);
+      color: #bbf7d0;
+    }
+    .lead-detail-status.error {
+      border-color: rgba(248, 113, 113, 0.34);
+      color: #fecaca;
+    }
+    .lead-detail-status.loading {
+      border-color: rgba(125, 211, 252, 0.24);
+      color: var(--accent);
+    }
+    .lead-detail-data {
+      display: none;
+      padding: 10px 11px;
+      border: 1px solid rgba(125, 211, 252, 0.16);
+      border-radius: 12px;
+      background: rgba(15, 23, 40, 0.58);
+      color: var(--text);
+      font-size: 0.76rem;
+      line-height: 1.4;
+      max-height: 260px;
+      overflow: auto;
+    }
+    .lead-detail-data.active {
+      display: block;
+    }
+    .lead-detail-summary {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .lead-detail-row {
+      display: grid;
+      grid-template-columns: 108px minmax(0, 1fr);
+      gap: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .lead-detail-key {
+      color: var(--muted-strong);
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .lead-detail-value {
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .lead-detail-json summary {
+      cursor: pointer;
+      color: var(--accent);
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .lead-detail-json pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      color: #dbeafe;
+      font-size: 0.72rem;
+    }
     .control-btn {
       width: 100%;
       padding: 11px 14px;
@@ -127,12 +226,47 @@
       color: white;
       box-shadow: 0 10px 24px rgba(31, 122, 61, 0.28);
     }
+    .capture-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .capture-controls .control-btn {
+      margin: 0;
+    }
+    .pause-btn {
+      min-width: 112px;
+      padding: 11px 12px;
+      border: 1px solid rgba(251, 191, 36, 0.32);
+      border-radius: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      font-size: 0.86rem;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease;
+      background: linear-gradient(135deg, #b45309, #f59e0b);
+      color: #fffaf0;
+      box-shadow: 0 10px 24px rgba(245, 158, 11, 0.22);
+    }
+    .pause-btn.paused {
+      background: linear-gradient(135deg, #0f766e, #14b8a6);
+      border-color: rgba(45, 212, 191, 0.32);
+      box-shadow: 0 10px 24px rgba(20, 184, 166, 0.22);
+    }
+    .pause-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+      box-shadow: none;
+      transform: none;
+    }
     .control-btn.active {
       background: linear-gradient(135deg, #b4233e, #ef4444);
       box-shadow: 0 10px 24px rgba(180, 35, 62, 0.28);
     }
     .control-btn:hover,
     .control-btn:focus-visible,
+    .pause-btn:hover:not(:disabled),
+    .pause-btn:focus-visible:not(:disabled),
     .summary-btn:hover,
     .summary-btn:focus-visible,
     .clear-btn:hover,
@@ -144,6 +278,7 @@
       transform: translateY(-1px);
     }
     .control-btn:focus-visible,
+    .pause-btn:focus-visible,
     .summary-btn:focus-visible,
     .clear-btn:focus-visible,
     .modal-close:focus-visible,
@@ -185,6 +320,15 @@
     .summary-btn:hover {
       background: linear-gradient(135deg, #0f5aa6, #177ecb);
     }
+    #mic-permission-btn {
+      background: linear-gradient(135deg, #c2410c, #f97316);
+      border-color: rgba(251, 146, 60, 0.28);
+      box-shadow: 0 10px 24px rgba(249, 115, 22, 0.22);
+    }
+    #mic-permission-btn:hover,
+    #mic-permission-btn:focus-visible {
+      background: linear-gradient(135deg, #9a3412, #ea580c);
+    }
     .summary-btn:disabled {
       background: linear-gradient(135deg, #4b5563, #64748b);
       cursor: not-allowed;
@@ -197,6 +341,16 @@
     }
     .action-buttons button {
       flex: 1;
+    }
+    .secondary-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .secondary-actions .mode-btn,
+    .secondary-actions .summary-btn {
+      margin-top: 0;
     }
     .clear-btn {
       background: none;
@@ -430,6 +584,36 @@
       line-height: 1.45;
       color: var(--text);
     }
+    .chat-kv-card {
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(125, 211, 252, 0.14);
+      background: rgba(9, 17, 31, 0.38);
+    }
+    .chat-kv-row {
+      display: grid;
+      grid-template-columns: minmax(110px, 180px) 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .chat-kv-key {
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      word-break: break-word;
+    }
+    .chat-kv-value {
+      color: var(--text);
+      font-size: 0.92rem;
+      font-weight: 600;
+      word-break: break-word;
+      text-align: right;
+    }
     .chat-message.loading .chat-text {
       color: var(--muted);
     }
@@ -608,6 +792,34 @@
       text-align: right;
       word-break: break-word;
     }
+    .summary-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .summary-secondary-btn {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1px solid rgba(125, 211, 252, 0.2);
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
+      background: linear-gradient(135deg, #14284a, #1f5f8f);
+      color: white;
+      box-shadow: 0 10px 24px rgba(15, 23, 40, 0.26);
+    }
+    .summary-secondary-btn:hover,
+    .summary-secondary-btn:focus-visible {
+      background: linear-gradient(135deg, #17305c, #2675aa);
+    }
+    .summary-actions-note {
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.4;
+    }
     .summary-item-label {
       font-size: 0.75rem;
       color: var(--muted-strong);
@@ -702,13 +914,24 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
         </button>
       </div>
-      <button id="toggle-btn" class="control-btn">Start Capture</button>
-      <button id="capture-mode-btn" class="mode-btn">Mode: Google Meet</button>
+      <div id="current-tab-url" class="current-tab-url" title="Current tab URL">
+        <div class="current-tab-label">Current Tab URL</div>
+        <div id="current-tab-url-text" class="current-tab-value">Detecting current tab...</div>
+      </div>
+      <div id="lead-detail-status" class="lead-detail-status">Lead detail check will run on Ambak lead pages.</div>
+      <div id="lead-detail-data" class="lead-detail-data"></div>
+      <div class="capture-controls">
+        <button id="toggle-btn" class="control-btn">Start Capture</button>
+        <button id="pause-agent-btn" class="pause-btn" disabled>Pause Mic</button>
+      </div>
+      <div class="secondary-actions">
+        <button id="capture-mode-btn" class="mode-btn">Mode: Google Meet</button>
+        <button id="mic-permission-btn" class="summary-btn">
+          🎤 Mic Permission
+        </button>
+      </div>
       <button id="summary-btn" class="summary-btn">
         <span id="summary-btn-text">📊 Generate Summary & Insights</span>
-      </button>
-      <button id="mic-permission-btn" class="summary-btn" style="background-color: #ff9800;">
-        🎤 Grant Microphone Permission
       </button>
     </div>
     <div id="transcript-container"></div>
@@ -746,6 +969,7 @@
     </div>
   </div>
 
+  <script src="lead-detail-api.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

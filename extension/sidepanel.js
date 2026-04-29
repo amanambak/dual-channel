@@ -10,6 +10,7 @@ const chatTabBtn = document.getElementById('chat-tab');
 const callView = document.getElementById('call-view');
 const chatView = document.getElementById('chat-view');
 const toggleBtn = document.getElementById('toggle-btn');
+const pauseAgentBtn = document.getElementById('pause-agent-btn');
 const clearBtn = document.getElementById('clear-btn');
 const dot = document.getElementById('dot');
 const captureModeBtn = document.getElementById('capture-mode-btn');
@@ -22,10 +23,17 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send-btn');
 const clearChatBtn = document.getElementById('clear-chat-btn');
+const currentTabUrl = document.getElementById('current-tab-url');
+const currentTabUrlText = document.getElementById('current-tab-url-text');
+const leadDetailStatus = document.getElementById('lead-detail-status');
+const leadDetailData = document.getElementById('lead-detail-data');
 
 let activePanelTab = 'call';
 let chatMessages = [];
 let chatSending = false;
+let latestSummary = null;
+let leadDetailLookupTimer = null;
+let leadDetailRequestId = 0;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -81,6 +89,7 @@ async function initializePanel() {
   const [messages] = await Promise.all([
     loadStoredMessages(),
     loadStoredChatMessages(),
+    refreshCurrentTabUrl(),
   ]);
   renderStoredMessages(messages);
   renderStoredChatMessages();
@@ -89,12 +98,29 @@ async function initializePanel() {
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (response) {
       updateCaptureUI(response.active);
+      updateAgentMicPauseUI(response.agentMicPaused, response.active);
       updateCaptureModeUI(response.captureMode);
     }
   });
 }
 
 initializePanel();
+
+chrome.tabs.onActivated.addListener(() => {
+  refreshCurrentTabUrl();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') {
+    refreshCurrentTabUrl();
+  }
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+    refreshCurrentTabUrl();
+  }
+});
 
 callTabBtn.addEventListener('click', () => {
   setActivePanelTab('call');
@@ -111,7 +137,17 @@ toggleBtn.addEventListener('click', () => {
     }
     if (response) {
       updateCaptureUI(response.active);
+      updateAgentMicPauseUI(response.agentMicPaused, response.active);
     }
+  });
+});
+
+pauseAgentBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'TOGGLE_AGENT_MIC_PAUSE' }, (response) => {
+    if (chrome.runtime.lastError || !response) {
+      return;
+    }
+    updateAgentMicPauseUI(response.agentMicPaused, response.active);
   });
 });
 
@@ -206,9 +242,171 @@ function updateCaptureUI(isActive) {
   }
 }
 
+function updateAgentMicPauseUI(isPaused, isActive = true) {
+  pauseAgentBtn.disabled = !isActive;
+  pauseAgentBtn.classList.toggle('paused', Boolean(isPaused));
+  pauseAgentBtn.textContent = isPaused ? 'Resume Mic' : 'Pause Mic';
+}
+
 function updateCaptureModeUI(mode) {
   const isRtcMode = mode === 'rtc';
   captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
+}
+
+async function refreshCurrentTabUrl() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || tab?.pendingUrl || '';
+    updateCurrentTabUrl(url);
+  } catch (err) {
+    updateCurrentTabUrl('');
+  }
+}
+
+function updateCurrentTabUrl(url) {
+  if (!currentTabUrlText || !currentTabUrl) {
+    return;
+  }
+
+  const displayUrl = url || 'Current tab URL unavailable';
+  currentTabUrlText.textContent = displayUrl;
+  currentTabUrl.title = displayUrl;
+  scheduleLeadDetailLookup(url);
+}
+
+function scheduleLeadDetailLookup(url) {
+  if (!leadDetailStatus) {
+    return;
+  }
+
+  clearTimeout(leadDetailLookupTimer);
+  leadDetailLookupTimer = setTimeout(() => {
+    refreshLeadDetailStatus(url).catch(() => {});
+  }, 250);
+}
+
+async function refreshLeadDetailStatus(url) {
+  const requestId = leadDetailRequestId + 1;
+  leadDetailRequestId = requestId;
+
+  if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
+    updateLeadDetailStatus('Lead detail check will run on Ambak lead pages.');
+    renderLeadDetailData(null);
+    return;
+  }
+
+  updateLeadDetailStatus('Checking lead details from API...', 'loading');
+  renderLeadDetailData(null);
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', url }, (reply) => {
+      resolve(reply || {});
+    });
+  });
+
+  if (requestId !== leadDetailRequestId) {
+    return;
+  }
+
+  if (response.error) {
+    updateLeadDetailStatus(`Lead detail API check failed: ${response.error}`, 'error');
+    renderLeadDetailData(null);
+    return;
+  }
+  if (response.skipped) {
+    updateLeadDetailStatus(response.reason || 'Lead detail check skipped.');
+    renderLeadDetailData(null);
+    return;
+  }
+
+  updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
+  renderLeadDetailData(response.detail);
+}
+
+function formatLeadDetailStatus(leadId, detail) {
+  const customer = detail?.customer || {};
+  const leadDetails = detail?.lead_details || {};
+  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
+  const statusName = detail?.status_info?.statuslang?.status_name || '';
+  const loanAmount = leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '';
+  const parts = [`Lead ${leadId} details loaded`];
+  if (customerName) {
+    parts.push(customerName);
+  }
+  if (statusName) {
+    parts.push(statusName);
+  }
+  if (loanAmount) {
+    parts.push(`₹${loanAmount}`);
+  }
+  return parts.join(' · ');
+}
+
+function updateLeadDetailStatus(message, state = '') {
+  leadDetailStatus.textContent = message;
+  leadDetailStatus.classList.toggle('success', state === 'success');
+  leadDetailStatus.classList.toggle('error', state === 'error');
+  leadDetailStatus.classList.toggle('loading', state === 'loading');
+}
+
+function renderLeadDetailData(detail) {
+  if (!leadDetailData) {
+    return;
+  }
+  leadDetailData.innerHTML = '';
+  leadDetailData.classList.toggle('active', Boolean(detail));
+  if (!detail) {
+    return;
+  }
+
+  const customer = detail.customer || {};
+  const leadDetails = detail.lead_details || {};
+  const bankName = leadDetails.bank?.banklang?.bank_name || '';
+  const summary = {
+    Lead: detail.id || leadDetails.lead_id || '',
+    Customer: [customer.first_name, customer.last_name].filter(Boolean).join(' '),
+    Mobile: customer.mobile || '',
+    Email: customer.email || '',
+    Status: detail.status_info?.statuslang?.status_name || '',
+    Substatus: detail.sub_status_info?.substatuslang?.sub_status_name || '',
+    Bank: bankName,
+    Amount: leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '',
+  };
+
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'lead-detail-summary';
+  for (const [key, value] of Object.entries(summary)) {
+    if (!value) {
+      continue;
+    }
+    const row = document.createElement('div');
+    row.className = 'lead-detail-row';
+
+    const keyEl = document.createElement('div');
+    keyEl.className = 'lead-detail-key';
+    keyEl.textContent = key;
+
+    const valueEl = document.createElement('div');
+    valueEl.className = 'lead-detail-value';
+    valueEl.textContent = String(value);
+
+    row.appendChild(keyEl);
+    row.appendChild(valueEl);
+    summaryEl.appendChild(row);
+  }
+
+  const rawDetails = document.createElement('details');
+  rawDetails.className = 'lead-detail-json';
+
+  const rawSummary = document.createElement('summary');
+  rawSummary.textContent = 'View raw loaded data';
+
+  const rawJson = document.createElement('pre');
+  rawJson.textContent = JSON.stringify(detail, null, 2);
+
+  rawDetails.appendChild(rawSummary);
+  rawDetails.appendChild(rawJson);
+  leadDetailData.appendChild(summaryEl);
+  leadDetailData.appendChild(rawDetails);
 }
 
 function setActivePanelTab(tab, options = {}) {
@@ -241,12 +439,14 @@ function renderStoredChatMessages() {
   }
 
   for (const message of chatMessages) {
-    chatLog.appendChild(createChatMessageElement(message.role, message.content).element);
+    chatLog.appendChild(
+      createChatMessageElement(message.role, message.content, false, message.details).element,
+    );
   }
   scrollChatToBottom();
 }
 
-function createChatMessageElement(role, content, loading = false) {
+function createChatMessageElement(role, content, loading = false, details = null) {
   const el = document.createElement('div');
   el.className = `chat-message ${role === 'user' ? 'user' : 'assistant'}`;
   if (loading) {
@@ -264,7 +464,35 @@ function createChatMessageElement(role, content, loading = false) {
   el.appendChild(label);
   el.appendChild(text);
 
+  if (details && typeof details === 'object' && Object.keys(details).length > 0) {
+    el.appendChild(createKeyValueCard(details));
+  }
+
   return { element: el, text };
+}
+
+function createKeyValueCard(details) {
+  const card = document.createElement('div');
+  card.className = 'chat-kv-card';
+
+  for (const [key, value] of Object.entries(details)) {
+    const row = document.createElement('div');
+    row.className = 'chat-kv-row';
+
+    const keyEl = document.createElement('div');
+    keyEl.className = 'chat-kv-key';
+    keyEl.textContent = key;
+
+    const valueEl = document.createElement('div');
+    valueEl.className = 'chat-kv-value';
+    valueEl.textContent = String(value);
+
+    row.appendChild(keyEl);
+    row.appendChild(valueEl);
+    card.appendChild(row);
+  }
+
+  return card;
 }
 
 function scrollChatToBottom() {
@@ -399,7 +627,10 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
     scrollToBottom();
   },
 
-  CAPTURE_STATUS_CHANGED(message) { updateCaptureUI(message.active); },
+  CAPTURE_STATUS_CHANGED(message) {
+    updateCaptureUI(message.active);
+    updateAgentMicPauseUI(message.agentMicPaused, message.active);
+  },
   CAPTURE_MODE_CHANGED(message)   { updateCaptureModeUI(message.captureMode); },
 
   UTTERANCE_END() {
@@ -650,7 +881,86 @@ function addErrorToContainer(msg, source) {
   scrollToBottom();
 }
 
+function buildSummaryFieldMessage(customerInfo) {
+  const entries = Object.entries(customerInfo || {});
+  if (!entries.length) {
+    return 'No extracted fields were found.';
+  }
+
+  const lines = entries.map(([key, value]) => `${key}: ${value}`);
+  return `Extracted fields ready for database review:\n${lines.join('\n')}`;
+}
+
+async function sendSummaryToChat() {
+  const customerInfo = latestSummary?.customer_info || {};
+  const entries = Object.entries(customerInfo);
+
+  if (!entries.length) {
+    alert('No extracted fields available to send to chat.');
+    return;
+  }
+
+  setActivePanelTab('chat');
+  summaryModal.classList.remove('active');
+
+  const userText = buildSummaryFieldMessage(customerInfo);
+  chatMessages.push({
+    role: 'user',
+    content: userText,
+    timestamp: Date.now(),
+  });
+  renderStoredChatMessages();
+  await persistChatMessages().catch(() => {});
+
+  const assistantBubble = createChatMessageElement('assistant', 'Thinking...', true);
+  chatLog.appendChild(assistantBubble.element);
+  scrollChatToBottom();
+
+  chatSending = true;
+  chatSendBtn.disabled = true;
+
+  try {
+    const response = await new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: 'SUMMARY_CHAT_SEND',
+          customerInfo,
+          conversation: userText,
+        },
+        (reply) => resolve(reply),
+      );
+    });
+
+    const replyText = response?.reply || response?.error || '';
+    const filteredCustomerInfo = response?.customer_info || {};
+    if (!replyText && Object.keys(filteredCustomerInfo).length === 0) {
+      throw new Error('Empty reply');
+    }
+
+    assistantBubble.element.classList.remove('loading');
+    assistantBubble.text.textContent = replyText || 'Filtered data ready for insertion.';
+    if (Object.keys(filteredCustomerInfo).length > 0) {
+      assistantBubble.element.appendChild(createKeyValueCard(filteredCustomerInfo));
+    }
+    chatMessages.push({
+      role: 'assistant',
+      content: assistantBubble.text.textContent,
+      details: filteredCustomerInfo,
+      timestamp: Date.now(),
+    });
+    await persistChatMessages().catch(() => {});
+  } catch (err) {
+    assistantBubble.element.classList.add('loading');
+    assistantBubble.text.textContent = `Failed to prepare database question: ${err.message}`;
+  } finally {
+    chatSending = false;
+    chatSendBtn.disabled = false;
+    scrollChatToBottom();
+  }
+}
+
 function displaySummary(summary) {
+  latestSummary = summary || null;
   const customerInfo = summary?.customer_info || {};
   const entries = Object.entries(customerInfo);
 
@@ -665,7 +975,23 @@ function displaySummary(summary) {
           </div>
         </div>
       </div>
+      <div class="summary-actions">
+        <button id="summary-send-btn" class="summary-secondary-btn" type="button">
+          Send to Chat
+        </button>
+        <div class="summary-actions-note">
+          Returns the recommended extracted field(s) to insert into the database.
+        </div>
+      </div>
     `;
+    const button = document.getElementById('summary-send-btn');
+    if (button) {
+      button.onclick = () => {
+        sendSummaryToChat().catch((err) => {
+          alert(`Failed to send summary to chat: ${err.message}`);
+        });
+      };
+    }
     summaryModal.classList.add('active');
     return;
   }
@@ -682,7 +1008,23 @@ function displaySummary(summary) {
       <h3>Customer Info</h3>
       <div class="summary-card">${html}</div>
     </div>
+      <div class="summary-actions">
+        <button id="summary-send-btn" class="summary-secondary-btn" type="button">
+          Send to Chat
+        </button>
+        <div class="summary-actions-note">
+          Returns the recommended extracted field(s) to insert into the database.
+        </div>
+      </div>
   `;
+  const button = document.getElementById('summary-send-btn');
+  if (button) {
+    button.onclick = () => {
+      sendSummaryToChat().catch((err) => {
+        alert(`Failed to send summary to chat: ${err.message}`);
+      });
+    };
+  }
   summaryModal.classList.add('active');
 }
 

@@ -16,10 +16,16 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     )
-    llm_model: str = "gemini-3.1-flash-lite-preview"
-    llm_summary_model: str = "gemini-3.1-flash-lite-preview"
-    llm_extract_model: str = "gemini-3.1-flash-lite-preview"
+    openai_api_key: str = ""
+    llm_model: str = "gpt-5.4"
+    llm_summary_model: str = "gpt-5.4"
+    llm_extract_model: str = "gpt-5.4"
     request_timeout_seconds: float = 60.0
+
+    # RAG Settings
+    chroma_db_path: str = "chroma_db"
+    embedding_model: str = "gemini-embedding-2"
+    rag_top_k: int = 5
 
     model_config = SettingsConfigDict(
         env_file=".env",

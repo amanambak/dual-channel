@@ -13,13 +13,13 @@ from app.services.session_text import (
     build_known_fields_text,
     build_recent_conversation_context,
     convert_summary_to_hinglish,
+    decide_turn_action,
     detect_call_stage,
     get_average_confidence,
     looks_like_noise_or_filler,
     normalize_confidence,
     normalize_text,
     should_capture_final_segment,
-    should_extract_schema_fields,
     should_invoke_llm,
 )
 from app.services.session_turn_runner import run_turn_graph as run_turn_graph_helper
@@ -105,7 +105,13 @@ class SessionRuntime:
     def should_extract_schema_fields(
         self, utterance: str, average_confidence: float
     ) -> bool:
-        return should_extract_schema_fields(utterance, average_confidence)
+        return decide_turn_action(
+            utterance,
+            average_confidence,
+            "0",
+            self.last_llm_invoked_at,
+            self.min_llm_interval_seconds,
+        ).run_extraction
 
     def should_capture_final_segment(
         self, transcript: str, confidence: float | None

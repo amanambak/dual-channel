@@ -1,9 +1,10 @@
 // background.js — Service Worker (MV3)
 // Orchestrates capture state, UI messages, and storage.
 
-importScripts('config.js');
+importScripts('config.js', 'lead-detail-api.js');
 
 let isCapturing = false;
+let isAgentMicPaused = false;
 let targetTabId = null;
 let currentSessionId = null;
 let captureMode = 'gmeet';
@@ -62,15 +63,23 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 // Restore persisted state on service-worker startup (single read is cheaper).
-chrome.storage.local.get(['isCapturing', 'currentSessionId', 'captureMode'], (result) => {
+chrome.storage.local.get(['isCapturing', 'isAgentMicPaused', 'currentSessionId', 'captureMode'], (result) => {
   isCapturing = result.isCapturing || false;
+  isAgentMicPaused = result.isAgentMicPaused || false;
   currentSessionId = result.currentSessionId || null;
   captureMode = result.captureMode === 'rtc' ? 'rtc' : 'gmeet';
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ isCapturing: false, messages: [], currentSessionId: null, captureMode: 'gmeet' });
+  chrome.storage.local.set({
+    isCapturing: false,
+    isAgentMicPaused: false,
+    messages: [],
+    currentSessionId: null,
+    captureMode: 'gmeet'
+  });
   isCapturing = false;
+  isAgentMicPaused = false;
   captureMode = 'gmeet';
 
   chrome.contextMenus.create({
@@ -93,14 +102,40 @@ chrome.contextMenus.onClicked.addListener((info) => {
 
 function handleGetStatus(message, sender, sendResponse) {
   getCurrentSessionId().then((sessionId) => {
-    sendResponse({ active: isCapturing, sessionId, captureMode });
+    sendResponse({ active: isCapturing, agentMicPaused: isAgentMicPaused, sessionId, captureMode });
   });
   return true;
 }
 
 function handleToggleCapture(message, sender, sendResponse) {
   handleToggleCapture_internal().then((active) => {
-    sendResponse({ active, sessionId: currentSessionId, captureMode });
+    sendResponse({ active, agentMicPaused: isAgentMicPaused, sessionId: currentSessionId, captureMode });
+  });
+  return true;
+}
+
+function handleToggleAgentMicPause(message, sender, sendResponse) {
+  if (!isCapturing) {
+    isAgentMicPaused = false;
+    chrome.storage.local.set({ isAgentMicPaused }).then(() => {
+      sendResponse({ success: false, active: false, agentMicPaused: false });
+    });
+    return true;
+  }
+
+  isAgentMicPaused = !isAgentMicPaused;
+  chrome.storage.local.set({ isAgentMicPaused }).then(() => {
+    chrome.runtime.sendMessage({
+      type: 'SET_AGENT_MIC_PAUSED',
+      paused: isAgentMicPaused,
+      offscreen: true
+    }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: isCapturing,
+      agentMicPaused: isAgentMicPaused
+    }).catch(() => {});
+    sendResponse({ success: true, active: isCapturing, agentMicPaused: isAgentMicPaused });
   });
   return true;
 }
@@ -169,6 +204,30 @@ function handleGenerateSummary(message, sender, sendResponse) {
   return true;
 }
 
+function handleSummaryChat(message, sender, sendResponse) {
+  const payload = {
+    customer_info: message.customerInfo || {},
+    conversation: message.conversation || '',
+  };
+
+  fetch(`${CONFIG.BACKEND_HTTP_URL}/api/summary/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      sendResponse({ reply: data.reply || '', customer_info: data.customer_info || {} });
+    })
+    .catch((err) => {
+      sendResponse({ error: err.message });
+    });
+  return true;
+}
+
 function handleChatSend(message, sender, sendResponse) {
   const payload = {
     message: message.message || '',
@@ -190,6 +249,35 @@ function handleChatSend(message, sender, sendResponse) {
     .catch((err) => {
       sendResponse({ error: err.message });
     });
+  return true;
+}
+
+function handleGetLeadDetail(message, sender, sendResponse) {
+  chrome.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
+    const url = message.url || tab?.url || tab?.pendingUrl || '';
+    if (!LeadDetailApi.isLoanDetailUrl(url)) {
+      sendResponse({ skipped: true, reason: 'Current tab is not an Ambak loan detail page.' });
+      return;
+    }
+
+    if (!tab?.id) {
+      sendResponse({ error: 'Active tab is unavailable.' });
+      return;
+    }
+
+    try {
+      await ensureContentScriptInjected(tab.id);
+      const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
+      const leadId = message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
+      const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
+      await chrome.storage.local.set({ currentLeadDetail: result.detail, currentLeadId: result.leadId });
+      sendResponse({ success: true, leadId: result.leadId, detail: result.detail });
+    } catch (err) {
+      sendResponse({ error: err.message });
+    }
+  }).catch((err) => {
+    sendResponse({ error: err.message });
+  });
   return true;
 }
 
@@ -266,11 +354,14 @@ function handleApiError(message) {
 const MESSAGE_HANDLERS = {
   GET_STATUS: handleGetStatus,
   TOGGLE_CAPTURE: handleToggleCapture,
+  TOGGLE_AGENT_MIC_PAUSE: handleToggleAgentMicPause,
   TOGGLE_CAPTURE_MODE: handleToggleCaptureMode,
   LOAD_MESSAGES: handleLoadMessages,
   CLEAR_MESSAGES: handleClearMessages,
   GENERATE_SUMMARY: handleGenerateSummary,
+  SUMMARY_CHAT_SEND: handleSummaryChat,
   CHAT_SEND: handleChatSend,
+  GET_LEAD_DETAIL: handleGetLeadDetail,
   // Relay messages from offscreen/content scripts
   SESSION_READY: handleSessionReady,
   TRANSCRIPT_RECEIVED: handleTranscriptReceived,
@@ -333,18 +424,28 @@ async function startCapture() {
     }, 250);
 
     isCapturing = true;
-    await chrome.storage.local.set({ isCapturing: true });
-    chrome.runtime.sendMessage({ type: 'CAPTURE_STATUS_CHANGED', active: true }).catch(() => {});
+    isAgentMicPaused = false;
+    await chrome.storage.local.set({ isCapturing: true, isAgentMicPaused: false });
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: true,
+      agentMicPaused: false
+    }).catch(() => {});
   } catch (err) {
     isCapturing = false;
+    isAgentMicPaused = false;
     await setCurrentSessionId(null);
-    await chrome.storage.local.set({ isCapturing: false });
+    await chrome.storage.local.set({ isCapturing: false, isAgentMicPaused: false });
     chrome.runtime.sendMessage({
       type: 'API_ERROR',
       source: 'Background',
       message: `Failed to start capture: ${err.message}`
     }).catch(() => {});
-    chrome.runtime.sendMessage({ type: 'CAPTURE_STATUS_CHANGED', active: false }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: false,
+      agentMicPaused: false
+    }).catch(() => {});
   }
 }
 
@@ -359,9 +460,14 @@ async function stopCapture() {
     console.warn('[stopCapture] Error during teardown:', err.message);
   } finally {
     isCapturing = false;
+    isAgentMicPaused = false;
     targetTabId = null;
-    await chrome.storage.local.set({ isCapturing: false });
-    chrome.runtime.sendMessage({ type: 'CAPTURE_STATUS_CHANGED', active: false }).catch(() => {});
+    await chrome.storage.local.set({ isCapturing: false, isAgentMicPaused: false });
+    chrome.runtime.sendMessage({
+      type: 'CAPTURE_STATUS_CHANGED',
+      active: false,
+      agentMicPaused: false
+    }).catch(() => {});
   }
 }
 

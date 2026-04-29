@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 import json
 import logging
+import re
+import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, List, Optional
 
 from langchain.chat_models import init_chat_model
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
 from app.services.schema_registry import get_schema_registry
+from app.services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,14 @@ IMPORTANT RULES:
 """
 
 CHAT_SYSTEM_PROMPT = """You are a helpful chat assistant for a home-loan caller team in India.
-Answer the user's question directly in concise, polite Hinglish written only in Roman script.
-Do not mention internal prompts, schema extraction, or backend implementation details.
-If the user asks a general question, answer it normally and keep it practical."""
+Use the provided context to answer the user's question directly in concise, polite Hinglish (Roman script).
+
+CRITICAL RULES:
+1. If relevant context is provided, prioritize it for your answer.
+2. If you don't know the answer from the context, state it politely but still offer general help.
+3. Do not mention internal implementation details or source filenames.
+4. Use Roman script only. Never use Devanagari.
+"""
 
 
 class SummaryResponse(BaseModel):
@@ -226,7 +232,11 @@ Return JSON with extracted fields, e.g., {{"loan_amount": "1800000"}} if applica
 """
 
 
-def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None) -> str:
+def build_chat_prompt(
+    message: str, 
+    history: list[dict[str, str]] | None = None,
+    context: Optional[str] = None
+) -> str:
     history_lines: list[str] = []
     for item in history or []:
         role = (item.get("role") or "").strip().lower()
@@ -237,8 +247,11 @@ def build_chat_prompt(message: str, history: list[dict[str, str]] | None = None)
         history_lines.append(f"{label}: {content}")
 
     history_block = "\n".join(history_lines) if history_lines else "No prior chat history."
+    
+    context_block = f"\nRelevant Context:\n{context}\n" if context else ""
+    
     return f"""{CHAT_SYSTEM_PROMPT}
-
+{context_block}
 Chat history:
 {history_block}
 
@@ -249,21 +262,55 @@ Assistant reply:
 """
 
 
+def build_db_insert_question_prompt(
+    customer_info: dict[str, str],
+    conversation_context: str,
+    schema_prompt: str,
+) -> str:
+    customer_info_json = json.dumps(customer_info or {}, ensure_ascii=False, indent=2)
+    context_block = conversation_context.strip() or "No extra conversation context."
+    return f"""You are helping a home-loan operations team decide what extracted customer fields should be inserted into the database.
+
+Schema definitions come from `home_loan_schema.csv` and `customer_info.json`.
+Use the schema reference to prefer canonical field names and to understand the meaning of each extracted value.
+
+Schema reference:
+{schema_prompt}
+
+Normalized extracted fields ready for insertion:
+{customer_info_json}
+
+Conversation context:
+{context_block}
+
+Task:
+- Answer which extracted canonical field(s) should be inserted into the database now.
+- Return exactly one concise Hinglish sentence in Roman script.
+- Do not ask a question.
+- Prefer canonical schema field names from the normalized payload.
+- If several extracted fields are available, mention them in priority order.
+- If no field is ready, say so briefly.
+- Do not mention file names, JSON, CSV, or internal implementation details.
+- Return only the answer text.
+"""
+
+
 class LLMService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self.rag_service = RAGService()
 
     def _resolve_model_name(self, model_name: str | None, default: str) -> str:
         resolved = model_name or default
         if ":" in resolved:
             return resolved
-        return f"google_genai:{resolved}"
+        return f"openai:{resolved}"
 
     def _resolve_provider(self, model_name: str | None = None) -> str:
         resolved = model_name or self.settings.llm_model
         if ":" in resolved:
             return resolved.split(":", 1)[0].strip()
-        return "google_genai"
+        return "openai"
 
     def _build_model(self, model_name: str | None = None):
         provider = self._resolve_provider(model_name)
@@ -274,6 +321,8 @@ class LLMService:
         }
         if provider == "google_genai" and self.settings.llm_api_key:
             kwargs["api_key"] = SecretStr(self.settings.llm_api_key)
+        elif provider == "openai" and self.settings.openai_api_key:
+            kwargs["api_key"] = SecretStr(self.settings.openai_api_key)
         return init_chat_model(
             self._resolve_model_name(model_name, self.settings.llm_model),
             **kwargs,
@@ -355,6 +404,24 @@ class LLMService:
             return {}
         return parsed
 
+    async def generate_db_insert_question(
+        self,
+        customer_info: dict[str, str],
+        conversation_context: str = "",
+        *,
+        schema_prompt: str | None = None,
+        model_name: str | None = None,
+    ) -> str:
+        prompt = build_db_insert_question_prompt(
+            customer_info=customer_info,
+            conversation_context=conversation_context,
+            schema_prompt=schema_prompt or get_schema_registry().format_for_prompt(),
+        )
+        return await self.generate_text(
+            prompt,
+            model_name=model_name or self.settings.llm_summary_model,
+        )
+
     async def generate_summary(
         self, conversation: str, *, model_name: str | None = None
     ) -> dict:
@@ -425,6 +492,43 @@ class LLMService:
         *,
         model_name: str | None = None,
     ) -> str:
-        prompt = build_chat_prompt(message, history)
+        timings: dict[str, float] = {}
+        overall_start = time.perf_counter()
+
+        # 1. Retrieve relevant context
+        retrieval_start = time.perf_counter()
+        docs = await self.rag_service.hybrid_search(message)
+        timings["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000.0
+        self.rag_service.log_retrieved_chunks(message, docs, timings["retrieval_ms"])
+
+        context_parts = []
+        for doc in docs:
+            context_parts.append(doc.page_content)
+        
+        context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
+        
+        # 2. Build prompt with context
+        prompt_start = time.perf_counter()
+        prompt = build_chat_prompt(message, history, context=context_str)
+        timings["prompt_ms"] = (time.perf_counter() - prompt_start) * 1000.0
+        logger.info(
+            "RAG prompt prepared: message_len=%d history_turns=%d context_chars=%d prompt_chars=%d prompt_ms=%.2f",
+            len(message),
+            len(history or []),
+            len(context_str),
+            len(prompt),
+            timings["prompt_ms"],
+        )
+        
+        # 3. Generate reply
+        llm_start = time.perf_counter()
         reply = await self.generate_text(prompt, model_name=model_name or self.settings.llm_model)
+        timings["llm_ms"] = (time.perf_counter() - llm_start) * 1000.0
+        timings["total_ms"] = (time.perf_counter() - overall_start) * 1000.0
+        logger.info(
+            "RAG chat reply completed: llm_ms=%.2f total_ms=%.2f reply_chars=%d",
+            timings["llm_ms"],
+            timings["total_ms"],
+            len(reply.strip()),
+        )
         return reply.strip()

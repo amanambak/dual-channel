@@ -15,6 +15,7 @@ venv/
 .mypy_cache/
 .pytest_cache/
 
-.planning/
 customer_info.json
 home_loan_schema.csv
+/chroma_db/
+

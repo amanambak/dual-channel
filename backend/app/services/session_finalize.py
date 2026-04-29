@@ -6,11 +6,10 @@ import uuid
 from app.models.events import TranscriptEvent
 from app.models.events import UtteranceCommittedEvent
 from app.models.session import ConversationMessage
-from app.services.schema_normalizer import build_high_confidence_local_updates
 from app.services.session_text import (
     build_turn_dedupe_key,
+    decide_turn_action,
     get_average_confidence,
-    should_extract_schema_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,33 +59,34 @@ async def finalize_utterance(session) -> None:
         UtteranceCommittedEvent(utteranceId=utterance_id, text=text, speaker=speaker)
     )
 
-    if speaker != "1":
-        local_updates = build_high_confidence_local_updates(text)
-        if local_updates:
-            session.state.extracted_fields.update(local_updates)
-
-    session.last_should_extract = should_extract_schema_fields(text, average_confidence)
-
     logger.info("ABOUT TO CHECK TRIGGER for: %.30s", text)
-    should_trigger = False
+    decision = decide_turn_action(
+        utterance=text,
+        average_confidence=average_confidence,
+        speaker=speaker,
+        last_llm_invoked_at=session.last_llm_invoked_at,
+        cooldown=session.min_llm_interval_seconds,
+    )
+    session.last_should_extract = decision.run_extraction
     try:
         new_stage = session.detect_call_stage(text, speaker)
         if new_stage != session.state.call_stage:
             session.state.call_stage = new_stage
 
         await session.update_rolling_summary(text, speaker)
-        should_trigger = session.should_invoke_llm(text, average_confidence, speaker)
         logger.info(
-            "LLM trigger check: text=%.30s, confidence=%.2f, speaker=%s, triggered=%s",
+            "Turn decision: text=%.30s, confidence=%.2f, speaker=%s, extract=%s, reply=%s, reason=%s",
             text,
             average_confidence,
             speaker,
-            should_trigger,
+            decision.run_extraction,
+            decision.run_reply,
+            decision.reason,
         )
     except Exception as exc:
         logger.error("Error in trigger check: %s", exc, exc_info=True)
 
-    if session.last_should_extract or should_trigger:
+    if decision.run_extraction or decision.run_reply:
         dedupe_key = build_turn_dedupe_key(text, speaker)
         now = time.monotonic()
         if (
@@ -101,13 +101,14 @@ async def finalize_utterance(session) -> None:
             return
         session.state.last_triggered_utterance_key = dedupe_key
         session.state.last_triggered_utterance_at = now
-        session.last_llm_invoked_at = time.monotonic()
+        if decision.run_reply:
+            session.last_llm_invoked_at = time.monotonic()
         asyncio.create_task(
             session.run_turn_graph(
                 utterance=text,
                 utterance_id=utterance_id,
                 speaker=speaker,
-                should_extract=session.last_should_extract,
-                should_trigger=should_trigger,
+                should_extract=decision.run_extraction,
+                should_trigger=decision.run_reply,
             )
         )

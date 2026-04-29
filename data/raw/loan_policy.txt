@@ -1,0 +1,26 @@
+# Home Loan Policy Guidelines
+
+## 1. Eligibility Criteria
+To apply for a home loan, the customer must meet the following criteria:
+- Age: 21 to 65 years.
+- Employment: Must be salaried or self-employed with a stable income.
+- CIBIL Score: A minimum score of 750 is preferred for best interest rates.
+- Income: Minimum gross monthly salary of 25,000 INR for salaried individuals.
+
+## 2. Loan Amount and Tenure
+- Maximum Loan Amount: Up to 90% of the property value for loans up to 30 Lakhs.
+- Tenure: Flexible tenure up to 30 years.
+
+## 3. Required Documents
+Customers need to provide the following documents:
+- Identity Proof: PAN Card, Aadhaar Card, or Passport.
+- Address Proof: Voter ID, Utility Bills, or Aadhaar Card.
+- Income Proof: Last 3 months' salary slips, Form 16, and 6 months' bank statements.
+- Property Documents: Sale deed, NOC from builder, and property tax receipts.
+
+## 4. Application Process
+The application process involves four main steps:
+1. Application Submission: Fill out the form and submit documents.
+2. Verification: The bank verifies the documents and the property.
+3. Sanction: If eligible, the bank issues a sanction letter.
+4. Disbursement: After legal checks, the loan amount is disbursed.
