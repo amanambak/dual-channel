@@ -84,6 +84,14 @@ QUESTION_STOPWORDS = {
 }
 
 
+def normalize_lead_detail_payload(lead_detail: Any) -> dict[str, Any] | None:
+    if isinstance(lead_detail, dict):
+        return lead_detail
+    if isinstance(lead_detail, list):
+        return next((item for item in lead_detail if isinstance(item, dict)), None)
+    return None
+
+
 def _iter_leaf_values(value: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
     if isinstance(value, dict):
         for key, nested_value in value.items():
@@ -198,6 +206,165 @@ def _looks_like_lead_detail_question(message: str) -> bool:
     return bool(set(normalized.split()) & lead_terms)
 
 
+def _looks_like_document_question(message: str) -> bool:
+    normalized = _normalize_lookup_text(message)
+    if not normalized:
+        return False
+    document_terms = {
+        "document",
+        "documents",
+        "doc",
+        "docs",
+        "dre",
+        "missing",
+        "pending",
+        "uploaded",
+        "upload",
+    }
+    return bool(set(normalized.split()) & document_terms)
+
+
+def looks_like_document_question(message: str) -> bool:
+    return _looks_like_document_question(message)
+
+
+def _parse_possible_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if not trimmed or trimmed[0] not in "[{":
+        return None
+    try:
+        return json.loads(trimmed)
+    except json.JSONDecodeError:
+        return None
+
+
+def _is_doc_like(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return any(
+        key in value
+        for key in (
+            "doc_id",
+            "ldoc_id",
+            "parent_doc_id",
+            "doc_path",
+            "child_name",
+            "parent_name",
+            "is_doc_uploaded",
+            "doc_upload_url",
+        )
+    )
+
+
+def _collect_doc_items(value: Any, items: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    if items is None:
+        items = []
+    if value in (None, ""):
+        return items
+
+    parsed = _parse_possible_json(value)
+    if parsed is not None:
+        return _collect_doc_items(parsed, items)
+
+    if isinstance(value, list):
+        for item in value:
+            _collect_doc_items(item, items)
+        return items
+
+    if not isinstance(value, dict):
+        return items
+
+    if _is_doc_like(value):
+        items.append(value)
+    for nested_value in value.values():
+        _collect_doc_items(nested_value, items)
+    return items
+
+
+def _doc_name(doc: dict[str, Any]) -> str:
+    value = (
+        doc.get("child_name")
+        or doc.get("parent_name")
+        or doc.get("document_name")
+        or doc.get("doc_name")
+        or doc.get("label")
+    )
+    if value not in (None, ""):
+        return _format_value(value, max_chars=120)
+    doc_id = doc.get("doc_id") or doc.get("parent_doc_id") or doc.get("ldoc_id") or doc.get("id")
+    return f"Document {doc_id}" if doc_id not in (None, "") else "Document"
+
+
+def _is_uploaded_doc(doc: dict[str, Any]) -> bool:
+    if "is_doc_uploaded" in doc:
+        return doc.get("is_doc_uploaded") in (1, "1", True)
+    if doc.get("doc_upload_url") or doc.get("doc_path"):
+        return True
+    status = _normalize_lookup_text(str(doc.get("status") or ""))
+    return any(term in status for term in ("uploaded", "approved", "verified", "complete", "completed"))
+
+
+def _document_buckets(
+    *,
+    lead_detail: dict[str, Any] | None,
+    lead_dre_documents: Any = None,
+) -> tuple[list[str], list[str]]:
+    docs = []
+    docs.extend(_collect_doc_items(lead_dre_documents))
+    docs.extend(_collect_doc_items((lead_detail or {}).get("customer", {}).get("recommended_docs")))
+
+    by_key: dict[str, dict[str, Any]] = {}
+
+    for doc in docs:
+        name = _doc_name(doc)
+        key = str(doc.get("doc_id") or doc.get("parent_doc_id") or _normalize_lookup_text(name))
+        existing = by_key.get(key)
+        is_uploaded = _is_uploaded_doc(doc)
+        if existing:
+            existing["uploaded"] = bool(existing["uploaded"] or is_uploaded)
+            if existing["name"] == "Document" and name != "Document":
+                existing["name"] = name
+        else:
+            by_key[key] = {"name": name, "uploaded": is_uploaded}
+
+    uploaded = [item["name"] for item in by_key.values() if item["uploaded"]]
+    missing = [item["name"] for item in by_key.values() if not item["uploaded"]]
+    return uploaded, missing
+
+
+def _format_doc_list(values: list[str]) -> str:
+    return ", ".join(values) if values else "None"
+
+
+def find_direct_dre_document_answer(
+    message: str,
+    *,
+    lead_detail: dict[str, Any] | None = None,
+    lead_dre_documents: Any = None,
+    lead_dre_document_error: str | None = None,
+) -> str:
+    if not _looks_like_document_question(message):
+        return ""
+
+    uploaded, missing = _document_buckets(
+        lead_detail=lead_detail,
+        lead_dre_documents=lead_dre_documents,
+    )
+    if not uploaded and not missing:
+        if lead_dre_document_error:
+            return f"DRE document status is not available: {lead_dre_document_error}"
+        return "DRE document status is not available for the loaded lead."
+
+    return "\n".join(
+        [
+            f"Uploaded documents: {_format_doc_list(uploaded)}",
+            f"Missing documents: {_format_doc_list(missing)}",
+        ]
+    )
+
+
 def find_direct_lead_detail_answer(message: str, lead_detail: dict[str, Any] | None) -> str:
     if not lead_detail or not _looks_like_lead_detail_question(message):
         return ""
@@ -239,6 +406,8 @@ def build_lead_detail_chat_context(
     *,
     lead_id: str | int | None,
     lead_detail: dict[str, Any] | None,
+    lead_dre_documents: Any = None,
+    lead_dre_document_error: str | None = None,
     max_flat_fields: int = 160,
 ) -> str:
     if not lead_detail:
@@ -272,5 +441,18 @@ def build_lead_detail_chat_context(
         sections.append("Important loaded fields:\n" + "\n".join(important_lines))
     if searchable_lines:
         sections.append("Additional searchable loaded fields:\n" + "\n".join(searchable_lines))
+
+    uploaded, missing = _document_buckets(
+        lead_detail=lead_detail,
+        lead_dre_documents=lead_dre_documents,
+    )
+    if uploaded or missing:
+        sections.append(
+            "DRE document status:\n"
+            f"- Uploaded documents: {_format_doc_list(uploaded)}\n"
+            f"- Missing documents: {_format_doc_list(missing)}"
+        )
+    elif lead_dre_document_error:
+        sections.append(f"DRE document status unavailable: {lead_dre_document_error}")
 
     return "\n\n".join(sections)

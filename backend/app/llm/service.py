@@ -11,7 +11,8 @@ from pydantic.types import SecretStr
 
 from app.core.config import get_settings
 from app.services.lead_detail_context import build_lead_detail_chat_context
-from app.services.lead_detail_context import find_direct_lead_detail_answer
+from app.services.lead_detail_context import looks_like_document_question
+from app.services.lead_detail_context import normalize_lead_detail_payload
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
 from app.services.schema_registry import get_schema_registry
@@ -52,9 +53,11 @@ Use the provided context to answer the user's question directly in concise, poli
 
 CRITICAL RULES:
 1. If relevant context is provided, prioritize it for your answer.
-2. If you don't know the answer from the context, state it politely but still offer general help.
-3. Do not mention internal implementation details or source filenames.
-4. Use Roman script only. Never use Devanagari.
+2. If the user asks about lead documents, answer specifically from the "DRE document status" section.
+3. For document questions, do not invent uploaded or missing documents. If DRE document status is unavailable, say that clearly and include the provided error if present.
+4. If you don't know the answer from the context, state it politely but still offer general help.
+5. Do not mention internal implementation details or source filenames.
+6. Use Roman script only. Never use Devanagari.
 """
 
 
@@ -509,36 +512,37 @@ class LLMService:
         lead_id: str | int | None = None,
         lead_detail: dict | None = None,
         lead_facts: dict | None = None,
+        lead_dre_documents: object | None = None,
+        lead_dre_document_error: str | None = None,
         model_name: str | None = None,
     ) -> str:
         timings: dict[str, float] = {}
         overall_start = time.perf_counter()
-        searchable_lead_detail = lead_detail or lead_facts
-
-        direct_lead_answer = find_direct_lead_detail_answer(message, searchable_lead_detail)
-        if direct_lead_answer:
-            logger.info(
-                "Lead chat direct answer completed: lead_id=%s total_ms=%.2f reply_chars=%d",
-                lead_id,
-                (time.perf_counter() - overall_start) * 1000.0,
-                len(direct_lead_answer),
-            )
-            return direct_lead_answer
+        normalized_lead_detail = normalize_lead_detail_payload(lead_detail)
+        searchable_lead_detail = normalized_lead_detail or lead_facts
+        is_document_question = looks_like_document_question(message)
 
         # 1. Retrieve relevant context
         retrieval_start = time.perf_counter()
-        docs = await self.rag_service.hybrid_search(message)
-        timings["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000.0
-        self.rag_service.log_retrieved_chunks(message, docs, timings["retrieval_ms"])
+        if is_document_question:
+            docs = []
+            timings["retrieval_ms"] = 0.0
+            context_str = "No relevant policy documents needed for this lead document question."
+        else:
+            docs = await self.rag_service.hybrid_search(message)
+            timings["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000.0
+            self.rag_service.log_retrieved_chunks(message, docs, timings["retrieval_ms"])
 
-        context_parts = []
-        for doc in docs:
-            context_parts.append(doc.page_content)
+            context_parts = []
+            for doc in docs:
+                context_parts.append(doc.page_content)
         
-        context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
+            context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
         lead_context = build_lead_detail_chat_context(
             lead_id=lead_id,
             lead_detail=searchable_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_dre_document_error=lead_dre_document_error,
         )
         
         # 2. Build prompt with context

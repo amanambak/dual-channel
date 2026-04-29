@@ -146,6 +146,45 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("lead_details.loan_amount: 2500000", prompt)
             self.assertIn("customer.first_name: Rahul", prompt)
 
+    async def test_chat_route_accepts_dre_documents_and_normalizes_lead_detail_array(self):
+        os.environ.setdefault("GOOGLE_API_KEY", "test-key")
+        os.environ.setdefault("GEMINI_API_KEY", "test-key")
+
+        payload = {
+            "message": "which documents are missing?",
+            "lead_id": 674,
+            "lead_detail": [
+                {
+                    "id": 674,
+                    "customer": {"customer_id": 21088, "first_name": "Aman"},
+                }
+            ],
+            "lead_dre_documents": {
+                "documents": [
+                    {"child_name": "PAN Card", "doc_path": "pan.pdf"},
+                    {"child_name": "Aadhaar Card", "status": "pending"},
+                ]
+            },
+        }
+
+        with patch(
+            "app.api.websocket.llm_service.generate_chat_reply",
+            new=AsyncMock(return_value="Uploaded documents: PAN Card\nMissing documents: Aadhaar Card"),
+        ) as mock_generate:
+            from app.api.websocket import ChatRequest, chat_reply
+
+            response = await chat_reply(ChatRequest(**payload))
+
+        self.assertEqual(
+            response["reply"],
+            "Uploaded documents: PAN Card\nMissing documents: Aadhaar Card",
+        )
+        self.assertTrue(response["lead_context_used"])
+        _, kwargs = mock_generate.await_args
+        self.assertEqual(kwargs["lead_detail"]["id"], 674)
+        self.assertEqual(kwargs["lead_detail"]["customer"]["customer_id"], 21088)
+        self.assertEqual(kwargs["lead_dre_documents"], payload["lead_dre_documents"])
+
     def test_lead_detail_context_flattens_key_fields(self):
         from app.services.lead_detail_context import build_lead_detail_chat_context
 
@@ -161,7 +200,25 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("customer.email: rahul@example.com", context)
         self.assertIn("lead_details.property_city: Noida", context)
 
-    async def test_chat_answers_loaded_lead_field_without_rag(self):
+    def test_lead_detail_context_includes_dre_document_summary(self):
+        from app.services.lead_detail_context import build_lead_detail_chat_context
+
+        context = build_lead_detail_chat_context(
+            lead_id=668,
+            lead_detail={"id": 668, "customer": {"first_name": "Rahul"}},
+            lead_dre_documents={
+                "documents": [
+                    {"child_name": "PAN Card", "doc_path": "pan.pdf"},
+                    {"child_name": "Bank Statement", "is_doc_uploaded": 0},
+                ]
+            },
+        )
+
+        self.assertIn("DRE document status", context)
+        self.assertIn("Uploaded documents: PAN Card", context)
+        self.assertIn("Missing documents: Bank Statement", context)
+
+    async def test_chat_sends_loaded_lead_field_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
             fake_rag = mock_rag_cls.return_value
             fake_rag.hybrid_search = AsyncMock(return_value=[])
@@ -169,7 +226,13 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
             from app.llm.service import LLMService
 
             service = LLMService()
-            service.generate_text = AsyncMock(return_value="Should not be called")
+            captured_prompt = {}
+
+            async def fake_generate_text(prompt: str, *, model_name: str | None = None) -> str:
+                captured_prompt["prompt"] = prompt
+                return "Partner name Ambak Partner hai."
+
+            service.generate_text = AsyncMock(side_effect=fake_generate_text)
 
             reply = await service.generate_chat_reply(
                 "what is partner name?",
@@ -177,11 +240,12 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_detail={"partner_name": "Ambak Partner"},
             )
 
-            self.assertEqual(reply, "Partner name: Ambak Partner")
-            fake_rag.hybrid_search.assert_not_awaited()
-            service.generate_text.assert_not_awaited()
+            self.assertEqual(reply, "Partner name Ambak Partner hai.")
+            fake_rag.hybrid_search.assert_awaited_once_with("what is partner name?")
+            service.generate_text.assert_awaited_once()
+            self.assertIn("partner_name: Ambak Partner", captured_prompt["prompt"])
 
-    async def test_chat_answers_loaded_lead_field_from_flat_facts(self):
+    async def test_chat_sends_flat_facts_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
             fake_rag = mock_rag_cls.return_value
             fake_rag.hybrid_search = AsyncMock(return_value=[])
@@ -189,7 +253,13 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
             from app.llm.service import LLMService
 
             service = LLMService()
-            service.generate_text = AsyncMock(return_value="Should not be called")
+            captured_prompt = {}
+
+            async def fake_generate_text(prompt: str, *, model_name: str | None = None) -> str:
+                captured_prompt["prompt"] = prompt
+                return "Customer first name Aman hai."
+
+            service.generate_text = AsyncMock(side_effect=fake_generate_text)
 
             reply = await service.generate_chat_reply(
                 "what is customer first name?",
@@ -197,11 +267,12 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_facts={"customer.first_name": "Aman"},
             )
 
-            self.assertEqual(reply, "First name: Aman")
-            fake_rag.hybrid_search.assert_not_awaited()
-            service.generate_text.assert_not_awaited()
+            self.assertEqual(reply, "Customer first name Aman hai.")
+            fake_rag.hybrid_search.assert_awaited_once_with("what is customer first name?")
+            service.generate_text.assert_awaited_once()
+            self.assertIn("customer.first_name: Aman", captured_prompt["prompt"])
 
-    async def test_chat_answers_grouped_customer_name_in_structured_format(self):
+    async def test_chat_sends_grouped_customer_name_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
             fake_rag = mock_rag_cls.return_value
             fake_rag.hybrid_search = AsyncMock(return_value=[])
@@ -209,7 +280,13 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
             from app.llm.service import LLMService
 
             service = LLMService()
-            service.generate_text = AsyncMock(return_value="Should not be called")
+            captured_prompt = {}
+
+            async def fake_generate_text(prompt: str, *, model_name: str | None = None) -> str:
+                captured_prompt["prompt"] = prompt
+                return "Customer name Gautam Gambhir hai."
+
+            service.generate_text = AsyncMock(side_effect=fake_generate_text)
 
             reply = await service.generate_chat_reply(
                 "what is customer name?",
@@ -217,11 +294,13 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_facts={"customer.first_name": "Gautam", "customer.last_name": "Gambhir"},
             )
 
-            self.assertEqual(reply, "Customer name: Gautam Gambhir")
-            fake_rag.hybrid_search.assert_not_awaited()
-            service.generate_text.assert_not_awaited()
+            self.assertEqual(reply, "Customer name Gautam Gambhir hai.")
+            fake_rag.hybrid_search.assert_awaited_once_with("what is customer name?")
+            service.generate_text.assert_awaited_once()
+            self.assertIn("customer.first_name: Gautam", captured_prompt["prompt"])
+            self.assertIn("customer.last_name: Gambhir", captured_prompt["prompt"])
 
-    async def test_chat_answers_followup_data_in_structured_format(self):
+    async def test_chat_sends_followup_data_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
             fake_rag = mock_rag_cls.return_value
             fake_rag.hybrid_search = AsyncMock(return_value=[])
@@ -229,7 +308,13 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
             from app.llm.service import LLMService
 
             service = LLMService()
-            service.generate_text = AsyncMock(return_value="Should not be called")
+            captured_prompt = {}
+
+            async def fake_generate_text(prompt: str, *, model_name: str | None = None) -> str:
+                captured_prompt["prompt"] = prompt
+                return "Followup 28 April 2026 ko call hai."
+
+            service.generate_text = AsyncMock(side_effect=fake_generate_text)
 
             reply = await service.generate_chat_reply(
                 "what is followup data?",
@@ -237,9 +322,88 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_facts={"followup_date": "28 April 2026", "followup_type": "call"},
             )
 
-            self.assertEqual(reply, "Followup date: 28 April 2026\nFollowup type: call")
+            self.assertEqual(reply, "Followup 28 April 2026 ko call hai.")
+            fake_rag.hybrid_search.assert_awaited_once_with("what is followup data?")
+            service.generate_text.assert_awaited_once()
+            self.assertIn("followup_date: 28 April 2026", captured_prompt["prompt"])
+            self.assertIn("followup_type: call", captured_prompt["prompt"])
+
+    async def test_chat_sends_dre_document_status_to_llm_without_rag(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+            captured_prompt = {}
+
+            async def fake_generate_text(prompt: str, *, model_name: str | None = None) -> str:
+                captured_prompt["prompt"] = prompt
+                return "Uploaded PAN Card hai. Missing Aadhaar Card aur Salary Slip hai."
+
+            service.generate_text = AsyncMock(side_effect=fake_generate_text)
+
+            reply = await service.generate_chat_reply(
+                "Which documents are missing?",
+                lead_id=674,
+                lead_detail=[
+                    {
+                        "id": 674,
+                        "customer": {
+                            "recommended_docs": [
+                                {"child_name": "Salary Slip", "is_doc_uploaded": 0},
+                            ]
+                        },
+                    }
+                ],
+                lead_dre_documents={
+                    "documents": [
+                        {"child_name": "PAN Card", "doc_path": "pan.pdf"},
+                        {"child_name": "Aadhaar Card", "status": "pending"},
+                    ]
+                },
+            )
+
+            self.assertEqual(reply, "Uploaded PAN Card hai. Missing Aadhaar Card aur Salary Slip hai.")
             fake_rag.hybrid_search.assert_not_awaited()
-            service.generate_text.assert_not_awaited()
+            service.generate_text.assert_awaited_once()
+            prompt = captured_prompt["prompt"]
+            self.assertIn("DRE document status", prompt)
+            self.assertIn("Uploaded documents: PAN Card", prompt)
+            self.assertIn("Missing documents: Aadhaar Card, Salary Slip", prompt)
+            self.assertIn("No relevant policy documents needed for this lead document question.", prompt)
+
+    async def test_chat_sends_dre_document_error_to_llm_without_rag(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+            captured_prompt = {}
+
+            async def fake_generate_text(prompt: str, *, model_name: str | None = None) -> str:
+                captured_prompt["prompt"] = prompt
+                return "DRE document status abhi available nahi hai."
+
+            service.generate_text = AsyncMock(side_effect=fake_generate_text)
+
+            reply = await service.generate_chat_reply(
+                "Tell me about DRE documents",
+                lead_id=674,
+                lead_detail={"id": 674},
+                lead_dre_document_error="Lead DRE document API failed with HTTP 500.",
+            )
+
+            self.assertEqual(reply, "DRE document status abhi available nahi hai.")
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_awaited_once()
+            self.assertIn(
+                "DRE document status unavailable: Lead DRE document API failed with HTTP 500.",
+                captured_prompt["prompt"],
+            )
 
 
 if __name__ == "__main__":

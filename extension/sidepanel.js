@@ -367,14 +367,15 @@ async function refreshLeadDetailStatus(url) {
   lastLeadLookupKey = lookupKey || buildLeadLookupKey(url);
   leadLookupInFlightKey = '';
   updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
-  renderLeadDetailData(response.detail);
+  renderLeadDetailData(response.detail, response.dreDocuments || null, response.dreDocumentError || '');
 }
 
 function formatLeadDetailStatus(leadId, detail) {
-  const customer = detail?.customer || {};
-  const leadDetails = detail?.lead_details || {};
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
+  const customer = leadRecord?.customer || {};
+  const leadDetails = leadRecord?.lead_details || {};
   const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
-  const statusName = detail?.status_info?.statuslang?.status_name || '';
+  const statusName = leadRecord?.status_info?.statuslang?.status_name || '';
   const loanAmount = leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '';
   const parts = [`Lead ${leadId} details loaded`];
   if (customerName) {
@@ -396,7 +397,146 @@ function updateLeadDetailStatus(message, state = '') {
   leadDetailStatus.classList.toggle('loading', state === 'loading');
 }
 
-function renderLeadDetailData(detail) {
+function toFlagText(value) {
+  if (value === 1 || value === '1' || value === true) {
+    return 'Executed';
+  }
+  if (value === 0 || value === '0' || value === false) {
+    return 'Not executed';
+  }
+  return '';
+}
+
+function getDreStatus(detail) {
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
+  return toFlagText(leadRecord?.customer?.dre_executed)
+    || toFlagText(leadRecord?.lead_details?.dre_executed)
+    || toFlagText(Array.isArray(leadRecord?.co_applicant) ? leadRecord.co_applicant.find((item) => item?.dre_executed !== undefined)?.dre_executed : undefined);
+}
+
+function isDocLike(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  return ['doc_id', 'ldoc_id', 'parent_doc_id', 'doc_path', 'child_name', 'parent_name', 'is_doc_uploaded', 'doc_upload_url'].some((key) => key in value);
+}
+
+function parsePossibleJson(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !/^[{[]/.test(trimmed)) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch (err) {
+    return null;
+  }
+}
+
+function collectDocItems(value, items = []) {
+  if (!value) {
+    return items;
+  }
+  const parsed = parsePossibleJson(value);
+  if (parsed) {
+    return collectDocItems(parsed, items);
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectDocItems(item, items));
+    return items;
+  }
+  if (typeof value !== 'object') {
+    return items;
+  }
+  if (isDocLike(value)) {
+    items.push(value);
+  }
+  Object.values(value).forEach((nestedValue) => collectDocItems(nestedValue, items));
+  return items;
+}
+
+function getDocName(doc) {
+  return doc.child_name
+    || doc.parent_name
+    || doc.document_name
+    || doc.doc_name
+    || doc.label
+    || (doc.doc_id ? `Document ${doc.doc_id}` : 'Document');
+}
+
+function isDocumentUploaded(doc) {
+  if ('is_doc_uploaded' in doc) {
+    return doc.is_doc_uploaded === 1 || doc.is_doc_uploaded === '1' || doc.is_doc_uploaded === true;
+  }
+  if (doc.doc_upload_url || doc.doc_path) {
+    return true;
+  }
+  const status = String(doc.status || '').toLowerCase();
+  return ['uploaded', 'approved', 'verified', 'complete', 'completed'].some((term) => status.includes(term));
+}
+
+function buildDocumentBuckets(detail, dreDocuments) {
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
+  const docs = [
+    ...collectDocItems(dreDocuments),
+    ...collectDocItems(leadRecord?.customer?.recommended_docs),
+  ];
+  const seen = new Set();
+  const buckets = { uploaded: [], pending: [] };
+
+  docs.forEach((doc) => {
+    const name = getDocName(doc);
+    const key = [doc.id, doc.ldoc_id, doc.doc_id, doc.parent_doc_id, doc.customer_id, name].filter(Boolean).join(':');
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    buckets[isDocumentUploaded(doc) ? 'uploaded' : 'pending'].push({
+      name,
+      parentName: doc.parent_name || '',
+      status: doc.status || '',
+      path: doc.doc_path || doc.doc_upload_url || '',
+    });
+  });
+
+  return buckets;
+}
+
+function appendDocumentList(parent, title, docs, state) {
+  const section = document.createElement('div');
+  section.className = 'lead-document-group';
+
+  const heading = document.createElement('div');
+  heading.className = 'lead-document-heading';
+  heading.textContent = `${title} (${docs.length})`;
+  section.appendChild(heading);
+
+  if (!docs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'lead-document-empty';
+    empty.textContent = 'None';
+    section.appendChild(empty);
+  } else {
+    docs.forEach((doc) => {
+      const row = document.createElement('div');
+      row.className = `lead-document-item ${state}`;
+      const dot = document.createElement('span');
+      dot.className = 'lead-document-dot';
+      const label = document.createElement('span');
+      label.textContent = doc.parentName && doc.parentName !== doc.name ? `${doc.parentName} - ${doc.name}` : doc.name;
+      row.appendChild(dot);
+      row.appendChild(label);
+      section.appendChild(row);
+    });
+  }
+
+  parent.appendChild(section);
+}
+
+function renderLeadDetailData(detail, dreDocuments = null, dreDocumentError = '') {
   if (!leadDetailData) {
     return;
   }
@@ -406,18 +546,21 @@ function renderLeadDetailData(detail) {
     return;
   }
 
-  const customer = detail.customer || {};
-  const leadDetails = detail.lead_details || {};
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
+  const customer = leadRecord?.customer || {};
+  const leadDetails = leadRecord?.lead_details || {};
   const bankName = leadDetails.bank?.banklang?.bank_name || '';
+  const dreStatus = getDreStatus(detail);
   const summary = {
-    Lead: detail.id || leadDetails.lead_id || '',
+    Lead: leadRecord?.id || leadDetails.lead_id || '',
     Customer: [customer.first_name, customer.last_name].filter(Boolean).join(' '),
     Mobile: customer.mobile || '',
     Email: customer.email || '',
-    Status: detail.status_info?.statuslang?.status_name || '',
-    Substatus: detail.sub_status_info?.substatuslang?.sub_status_name || '',
+    Status: leadRecord?.status_info?.statuslang?.status_name || '',
+    Substatus: leadRecord?.sub_status_info?.substatuslang?.sub_status_name || '',
     Bank: bankName,
     Amount: leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '',
+    DRE: dreStatus,
   };
 
   const summaryEl = document.createElement('div');
@@ -449,11 +592,31 @@ function renderLeadDetailData(detail) {
   rawSummary.textContent = 'View raw loaded data';
 
   const rawJson = document.createElement('pre');
-  rawJson.textContent = JSON.stringify(detail, null, 2);
+  rawJson.textContent = JSON.stringify({ lead_detail: detail, dre_documents: dreDocuments }, null, 2);
+
+  const docBuckets = buildDocumentBuckets(detail, dreDocuments);
+  const documentsEl = document.createElement('div');
+  documentsEl.className = 'lead-document-section';
+
+  const documentsTitle = document.createElement('div');
+  documentsTitle.className = 'lead-document-title';
+  documentsTitle.textContent = 'DRE Documents';
+  documentsEl.appendChild(documentsTitle);
+
+  if (dreDocumentError) {
+    const error = document.createElement('div');
+    error.className = 'lead-document-error';
+    error.textContent = dreDocumentError;
+    documentsEl.appendChild(error);
+  }
+
+  appendDocumentList(documentsEl, 'Uploaded', docBuckets.uploaded, 'uploaded');
+  appendDocumentList(documentsEl, 'Pending', docBuckets.pending, 'pending');
 
   rawDetails.appendChild(rawSummary);
   rawDetails.appendChild(rawJson);
   leadDetailData.appendChild(summaryEl);
+  leadDetailData.appendChild(documentsEl);
   leadDetailData.appendChild(rawDetails);
 }
 
@@ -577,7 +740,13 @@ async function sendChatMessage() {
       content: item.content,
     }));
     const storedLead = await chrome.storage.local
-      .get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts'])
+      .get([
+        'currentLeadDetail',
+        'currentLeadId',
+        'currentLeadFacts',
+        'currentLeadDreDocuments',
+        'currentLeadDreDocumentError',
+      ])
       .catch(() => ({}));
     const leadDetailForChat = latestLeadDetail || storedLead.currentLeadDetail || null;
     const leadFactsForChat = latestLeadFacts || storedLead.currentLeadFacts || LeadDetailApi.buildLeadFacts(leadDetailForChat);
@@ -591,6 +760,8 @@ async function sendChatMessage() {
           lead_id: latestLeadId || storedLead.currentLeadId || null,
           lead_detail: leadDetailForChat,
           lead_facts: leadFactsForChat,
+          lead_dre_documents: storedLead.currentLeadDreDocuments || null,
+          lead_dre_document_error: storedLead.currentLeadDreDocumentError || null,
         },
         (reply) => resolve(reply),
       );

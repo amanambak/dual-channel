@@ -9,6 +9,7 @@ from app.llm.service import LLMService
 from app.services.session_manager import SessionManager
 from app.services.schema_registry import get_schema_registry
 from app.services.schema_normalizer import normalize_extracted_fields
+from app.services.lead_detail_context import normalize_lead_detail_payload
 
 router = APIRouter()
 session_manager = SessionManager()
@@ -35,6 +36,10 @@ class ChatRequest(BaseModel):
     leadDetail: Any = None
     lead_facts: Any = None
     leadFacts: Any = None
+    lead_dre_documents: Any = None
+    leadDreDocuments: Any = None
+    lead_dre_document_error: Any = None
+    leadDreDocumentError: Any = None
 
 
 def _normalize_chat_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -100,18 +105,23 @@ async def summary_chat(request: SummaryChatRequest) -> dict:
 @router.post("/api/chat")
 async def chat_reply(request: ChatRequest) -> dict:
     lead_id = request.lead_id or request.leadId
-    lead_detail = request.lead_detail or request.leadDetail
+    lead_detail = normalize_lead_detail_payload(request.lead_detail or request.leadDetail)
     lead_facts = request.lead_facts or request.leadFacts
-    if not isinstance(lead_detail, dict):
-        lead_detail = None
     if not isinstance(lead_facts, dict):
         lead_facts = None
+    lead_dre_documents = request.lead_dre_documents or request.leadDreDocuments
+    lead_dre_document_error = request.lead_dre_document_error or request.leadDreDocumentError
+    if lead_dre_document_error not in (None, ""):
+        lead_dre_document_error = str(lead_dre_document_error)
+    else:
+        lead_dre_document_error = None
 
     logger.info(
-        "Chat request lead context: lead_id=%s has_detail=%s has_facts=%s history_turns=%d",
+        "Chat request lead context: lead_id=%s has_detail=%s has_facts=%s has_dre_documents=%s history_turns=%d",
         lead_id,
         bool(lead_detail),
         bool(lead_facts),
+        bool(lead_dre_documents),
         len(request.history),
     )
 
@@ -121,5 +131,11 @@ async def chat_reply(request: ChatRequest) -> dict:
         lead_id=lead_id,
         lead_detail=lead_detail,
         lead_facts=lead_facts,
+        lead_dre_documents=lead_dre_documents,
+        lead_dre_document_error=lead_dre_document_error,
     )
-    return {"reply": reply, "lead_id": lead_id, "lead_context_used": bool(lead_detail or lead_facts)}
+    return {
+        "reply": reply,
+        "lead_id": lead_id,
+        "lead_context_used": bool(lead_detail or lead_facts or lead_dre_documents or lead_dre_document_error),
+    }

@@ -724,13 +724,68 @@ const LeadDetailApi = (() => {
     return String(token).replace(/^Bearer\s+/i, '').trim();
   }
 
-  async function fetchLeadDetail({ leadId, token }) {
-    const normalizedLeadId = normalizeLeadId(leadId);
-    const bearerToken = normalizeBearerToken(token);
-
-    if (!normalizedLeadId) {
-      throw new Error('Lead ID is required to fetch lead details.');
+  function getPrimaryLeadDetail(detail) {
+    if (Array.isArray(detail)) {
+      return detail.find((item) => item && typeof item === 'object') || null;
     }
+    return detail && typeof detail === 'object' ? detail : null;
+  }
+
+  function buildLeadDreDocumentQuery() {
+    return `mutation getLeadDreDocument($lead_id: Int!, $type: String!, $customer_id: Int, $coapplicant_id: Int) {
+  get_lead_dre_document(
+    lead_id: $lead_id
+    type: $type
+    customer_id: $customer_id
+    coapplicant_id: $coapplicant_id
+  ) {
+    untagged_images {
+      id
+      ldoc_id
+      lead_id
+      doc_id
+      status
+      customer_id
+      type
+      customer_type
+      created_date
+      updated_date
+      parent_doc_id
+      doc_path
+      child_name
+      parent_name
+      tranche_id
+      ai_tagged_doc_id
+      previous_tagged_doc_id
+      __typename
+    }
+    cam_report {
+      id
+      ldoc_id
+      lead_id
+      doc_id
+      status
+      customer_id
+      type
+      created_date
+      updated_date
+      parent_doc_id
+      doc_path
+      child_name
+      parent_name
+      ai_tagged_doc_id
+      previous_tagged_doc_id
+      __typename
+    }
+    legal_report
+    documents
+    __typename
+  }
+}`;
+  }
+
+  async function postGraphql({ token, body, errorLabel }) {
+    const bearerToken = normalizeBearerToken(token);
     if (!bearerToken) {
       throw new Error('Ambak auth token was not found on the lead page.');
     }
@@ -743,16 +798,32 @@ const LeadDetailApi = (() => {
         authorization: `Bearer ${bearerToken}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ variables: {}, query: buildLeadDetailQuery(normalizedLeadId) }),
+      body: JSON.stringify(body),
     });
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload?.message || `Lead detail API failed with HTTP ${response.status}.`);
+      throw new Error(payload?.message || `${errorLabel} failed with HTTP ${response.status}.`);
     }
     if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-      throw new Error(payload.errors.map((error) => error.message).filter(Boolean).join('; ') || 'Lead detail API returned errors.');
+      throw new Error(payload.errors.map((error) => error.message).filter(Boolean).join('; ') || `${errorLabel} returned errors.`);
     }
+
+    return payload;
+  }
+
+  async function fetchLeadDetail({ leadId, token }) {
+    const normalizedLeadId = normalizeLeadId(leadId);
+
+    if (!normalizedLeadId) {
+      throw new Error('Lead ID is required to fetch lead details.');
+    }
+
+    const payload = await postGraphql({
+      token,
+      errorLabel: 'Lead detail API',
+      body: { variables: {}, query: buildLeadDetailQuery(normalizedLeadId) },
+    });
 
     const leadDetail = payload?.data?.get_lead_detail || null;
     if (!leadDetail) {
@@ -760,6 +831,43 @@ const LeadDetailApi = (() => {
     }
 
     return { leadId: normalizedLeadId, detail: leadDetail };
+  }
+
+  async function fetchLeadDreDocuments({ leadId, token, type = 'customer', customerId = null, coapplicantId = null }) {
+    const normalizedLeadId = normalizeLeadId(leadId);
+    const normalizedCustomerId = normalizeLeadId(customerId);
+    const normalizedCoapplicantId = normalizeLeadId(coapplicantId);
+    const normalizedType = String(type || '').trim();
+
+    if (!normalizedLeadId) {
+      throw new Error('Lead ID is required to fetch DRE documents.');
+    }
+    if (!normalizedType) {
+      throw new Error('DRE document customer type is required.');
+    }
+
+    const payload = await postGraphql({
+      token,
+      errorLabel: 'Lead DRE document API',
+      body: {
+        operationName: 'getLeadDreDocument',
+        variables: {
+          lead_id: normalizedLeadId,
+          type: normalizedType,
+          customer_id: normalizedCustomerId,
+          coapplicant_id: normalizedCoapplicantId,
+        },
+        query: buildLeadDreDocumentQuery(),
+      },
+    });
+
+    return {
+      leadId: normalizedLeadId,
+      type: normalizedType,
+      customerId: normalizedCustomerId,
+      coapplicantId: normalizedCoapplicantId,
+      documents: payload?.data?.get_lead_dre_document || null,
+    };
   }
 
   function buildLeadFacts(detail, maxFields = 2000) {
@@ -791,7 +899,9 @@ const LeadDetailApi = (() => {
   return {
     buildLeadFacts,
     extractLeadIdFromUrl,
+    fetchLeadDreDocuments,
     fetchLeadDetail,
+    getPrimaryLeadDetail,
     isLoanDetailUrl,
   };
 })();
