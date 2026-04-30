@@ -200,6 +200,24 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("customer.email: rahul@example.com", context)
         self.assertIn("lead_details.property_city: Noida", context)
 
+    def test_lead_detail_context_prefers_executed_dre_status(self):
+        from app.services.lead_detail_context import build_lead_detail_chat_context
+        from app.services.lead_detail_context import find_direct_lead_detail_answer
+
+        lead_detail = {
+            "customer": {"dre_executed": 0},
+            "lead_details": {"dre_executed": 1},
+        }
+
+        context = build_lead_detail_chat_context(
+            lead_id=668,
+            lead_detail=lead_detail,
+        )
+        answer = find_direct_lead_detail_answer("what is DRE executed status", lead_detail)
+
+        self.assertIn("Effective DRE status: Executed", context)
+        self.assertEqual(answer, "DRE: Executed")
+
     def test_lead_detail_context_includes_dre_document_summary(self):
         from app.services.lead_detail_context import build_lead_detail_chat_context
 

@@ -248,6 +248,10 @@ async function fetchCustomerDreDocuments({ detail, leadId, token }) {
   }
 }
 
+function getPageAccessToken(pageContext) {
+  return pageContext?.accessToken || '';
+}
+
 async function loadLeadDetailForChat(message, stored) {
   if (message.lead_detail || message.leadDetail || stored.currentLeadDetail || message.lead_facts || message.leadFacts || stored.currentLeadFacts) {
     const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || null;
@@ -261,10 +265,11 @@ async function loadLeadDetailForChat(message, stored) {
       if (tab?.id && LeadDetailApi.isLoanDetailUrl(url)) {
         await ensureContentScriptInjected(tab.id);
         const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
+        const accessToken = getPageAccessToken(pageContext);
         const dreResult = await fetchCustomerDreDocuments({
           detail,
           leadId: leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId,
-          token: pageContext?.token,
+          token: accessToken,
         });
         dreDocuments = dreResult.documents;
         dreDocumentError = dreResult.error;
@@ -298,9 +303,10 @@ async function loadLeadDetailForChat(message, stored) {
 
   await ensureContentScriptInjected(tab.id);
   const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
+  const accessToken = getPageAccessToken(pageContext);
   const leadId = message.lead_id || message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
-  const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
-  const dreResult = await fetchCustomerDreDocuments({ detail: result.detail, leadId: result.leadId, token: pageContext?.token });
+  const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: accessToken });
+  const dreResult = await fetchCustomerDreDocuments({ detail: result.detail, leadId: result.leadId, token: accessToken });
   const facts = LeadDetailApi.buildLeadFacts(result.detail);
   await chrome.storage.local.set({
     currentLeadDetail: result.detail,
@@ -377,9 +383,10 @@ function handleGetLeadDetail(message, sender, sendResponse) {
     try {
       await ensureContentScriptInjected(tab.id);
       const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
+      const accessToken = getPageAccessToken(pageContext);
       const leadId = message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
-      const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
-      const dreResult = await fetchCustomerDreDocuments({ detail: result.detail, leadId: result.leadId, token: pageContext?.token });
+      const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: accessToken });
+      const dreResult = await fetchCustomerDreDocuments({ detail: result.detail, leadId: result.leadId, token: accessToken });
       await chrome.storage.local.set({
         currentLeadDetail: result.detail,
         currentLeadId: result.leadId,

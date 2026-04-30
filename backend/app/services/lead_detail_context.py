@@ -141,8 +141,35 @@ def _first_value(lead_detail: dict[str, Any], paths: list[str]) -> Any:
     return None
 
 
+def _flag_status(value: Any) -> str:
+    if value in (1, "1", True):
+        return "Executed"
+    if value in (0, "0", False):
+        return "Not executed"
+    return ""
+
+
+def _effective_dre_status(lead_detail: dict[str, Any]) -> str:
+    values = dict(_iter_leaf_values(lead_detail))
+    statuses = [
+        _flag_status(value)
+        for path, value in values.items()
+        if path.endswith("dre_executed")
+    ]
+    if "Executed" in statuses:
+        return "Executed"
+    if "Not executed" in statuses:
+        return "Not executed"
+    return ""
+
+
 def _maybe_grouped_direct_answer(message: str, lead_detail: dict[str, Any]) -> str:
     normalized = _normalize_lookup_text(message)
+
+    if "dre" in normalized and ("executed" in normalized or "execute" in normalized or "status" in normalized):
+        status = _effective_dre_status(lead_detail)
+        if status:
+            return _format_direct_answer([("DRE", status)])
 
     if "customer" in normalized and "name" in normalized and "first" not in normalized and "last" not in normalized:
         first_name = _first_value(lead_detail, ["customer.first_name"])
@@ -436,6 +463,9 @@ def build_lead_detail_chat_context(
         f"Lead ID: {lead_label}",
         "Answer only from these loaded lead details when the question is about customer, loan, lead, status, bank, RM, partner, property, income, CIBIL, or contact fields.",
     ]
+    dre_status = _effective_dre_status(lead_detail)
+    if dre_status:
+        sections.append(f"Effective DRE status: {dre_status}")
 
     if important_lines:
         sections.append("Important loaded fields:\n" + "\n".join(important_lines))

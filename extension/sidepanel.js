@@ -372,15 +372,10 @@ async function refreshLeadDetailStatus(url) {
 
 function formatLeadDetailStatus(leadId, detail) {
   const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
-  const customer = leadRecord?.customer || {};
   const leadDetails = leadRecord?.lead_details || {};
-  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
   const statusName = leadRecord?.status_info?.statuslang?.status_name || '';
   const loanAmount = leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '';
   const parts = [`Lead ${leadId} details loaded`];
-  if (customerName) {
-    parts.push(customerName);
-  }
   if (statusName) {
     parts.push(statusName);
   }
@@ -397,21 +392,8 @@ function updateLeadDetailStatus(message, state = '') {
   leadDetailStatus.classList.toggle('loading', state === 'loading');
 }
 
-function toFlagText(value) {
-  if (value === 1 || value === '1' || value === true) {
-    return 'Executed';
-  }
-  if (value === 0 || value === '0' || value === false) {
-    return 'Not executed';
-  }
-  return '';
-}
-
 function getDreStatus(detail) {
-  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
-  return toFlagText(leadRecord?.customer?.dre_executed)
-    || toFlagText(leadRecord?.lead_details?.dre_executed)
-    || toFlagText(Array.isArray(leadRecord?.co_applicant) ? leadRecord.co_applicant.find((item) => item?.dre_executed !== undefined)?.dre_executed : undefined);
+  return LeadDetailApi.getEffectiveDreStatus(detail);
 }
 
 function isDocLike(value) {
@@ -547,15 +529,11 @@ function renderLeadDetailData(detail, dreDocuments = null, dreDocumentError = ''
   }
 
   const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
-  const customer = leadRecord?.customer || {};
   const leadDetails = leadRecord?.lead_details || {};
   const bankName = leadDetails.bank?.banklang?.bank_name || '';
   const dreStatus = getDreStatus(detail);
   const summary = {
     Lead: leadRecord?.id || leadDetails.lead_id || '',
-    Customer: [customer.first_name, customer.last_name].filter(Boolean).join(' '),
-    Mobile: customer.mobile || '',
-    Email: customer.email || '',
     Status: leadRecord?.status_info?.statuslang?.status_name || '',
     Substatus: leadRecord?.sub_status_info?.substatuslang?.sub_status_name || '',
     Bank: bankName,
@@ -592,7 +570,12 @@ function renderLeadDetailData(detail, dreDocuments = null, dreDocumentError = ''
   rawSummary.textContent = 'View raw loaded data';
 
   const rawJson = document.createElement('pre');
-  rawJson.textContent = JSON.stringify({ lead_detail: detail, dre_documents: dreDocuments }, null, 2);
+  rawJson.textContent = JSON.stringify({
+    dre_status: dreStatus || null,
+    effective_dre_executed: LeadDetailApi.getEffectiveDreExecuted(detail),
+    lead_detail: detail,
+    dre_documents: dreDocuments,
+  }, null, 2);
 
   const docBuckets = buildDocumentBuckets(detail, dreDocuments);
   const documentsEl = document.createElement('div');
