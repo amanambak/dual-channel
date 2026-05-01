@@ -12,8 +12,10 @@ from pydantic.types import SecretStr
 from app.core.config import get_settings
 from app.services.lead_detail_context import build_lead_detail_chat_context
 from app.services.lead_detail_context import build_lead_field_index_prompt
+from app.services.lead_detail_context import discover_lead_field_paths
 from app.services.lead_detail_context import execute_lead_query_plan
 from app.services.lead_detail_context import format_priority_missing_context
+from app.services.lead_detail_context import sanitize_lead_query_plan
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
 from app.services.schema_registry import get_schema_registry
@@ -251,7 +253,7 @@ def build_chat_prompt(
     lead_context: Optional[str] = None,
 ) -> str:
     history_lines: list[str] = []
-    for item in history or []:
+    for item in (history or [])[-3:]:
         role = (item.get("role") or "").strip().lower()
         content = (item.get("content") or "").strip()
         if not content:
@@ -297,37 +299,29 @@ def combine_lead_search_sources(lead_detail: dict | None, lead_facts: dict | Non
 def build_lead_query_plan_prompt(message: str, field_index: str) -> str:
     return f"""You map a user chat message to a structured query over loaded Ambak lead data.
 
-Return strict JSON only, with one of these shapes:
-{{"action":"fields","paths":["exact.path.one","exact.path.two"]}}
-{{"action":"section","section_path":"exact.object.path"}}
-{{"action":"missing_fields","scope_prefixes":["customer","lead_details"],"field_groups":[],"query_terms":["words from user"],"priority_only":false}}
-{{"action":"missing_documents"}}
-{{"action":"next_step"}}
-{{"action":"fallback"}}
+Return strict JSON only:
+{{"action":"missing_fields|fields|next_step|fallback","fields":[],"confidence":0.0,"scope_hint":null}}
 
 Rules:
 - Return only the data explicitly asked for. Never expand the answer to nearby or related fields.
-- Choose only paths or section prefixes visible in the field index.
+- Only return fields when highly confident. Prefer empty fields over wrong fields.
+- fields must contain exact paths visible in the field index. Never invent fields.
+- Never extract raw words as filters.
+- scope_hint may be one of: property, income, credit, loan, or null.
 - Use "fields" for specific field questions, including natural language and Hinglish. If the user asks for one attribute such as name, mobile, email, status, amount, date, city, or bank name, return only that exact path.
-- Use "section" only when the user explicitly asks for the whole object with words like all, full, puri, complete, entire, or "all details"; or when the user names an object field itself, such as hierarchy_details, without a specific child attribute.
 - The word "details" alone does not mean section if the user also names a specific attribute. Example: "bank name details" is still a single field.
-- Use "missing_fields" when the user asks which profile/customer/lead fields are missing. Set scope_prefixes to relevant object prefixes from the index.
+- Use "missing_fields" when the user asks which profile/customer/lead fields are missing.
 - Set "priority_only": true when the user asks for priority/high-priority missing fields. Keep it false when they ask for all missing fields in a scope.
-- Include the user's domain words in query_terms. The backend resolves aliases dynamically to field groups and object scopes.
-- For scope words such as property/customer/lead, still prefer the matching scope_prefixes when obvious.
-- You may also set field_groups when an exact known group is obvious. Supported field_groups: "existing_loan_bt" for BT/existing-loan fields such as previous EMI, previous loan amount, previous loan start date, previous tenure, previous ROI, and remaining loan amount.
-- Use "missing_documents" when the user asks which documents/docs are missing.
+- For broad or ambiguous missing-field questions, return fields: [] and low confidence.
 - Use "next_step" when the user asks what to ask next, next action, next step, or follow-up suggestion for this lead.
 - Use "fallback" only when the question is not about loaded lead data.
 - Do not answer with values. The backend will verify values locally.
 
 Examples:
-- bank name? -> {{"action":"fields","paths":["lead_details.bank.banklang.bank_name"]}}
-- puri bank details -> {{"action":"section","section_path":"lead_details.bank"}}
-- rm mobile -> {{"action":"fields","paths":["rmdetails.mobile"]}}
-- hierarchy_details -> {{"action":"section","section_path":"hierarchy_details"}}
-- which priority property details are missing? -> {{"action":"missing_fields","scope_prefixes":["property_details"],"field_groups":[],"query_terms":["property"],"priority_only":true}}
-- missing Existing Loan / BT details -> {{"action":"missing_fields","scope_prefixes":[],"field_groups":[],"query_terms":["existing loan","bt"],"priority_only":true}}
+- bank name? -> {{"action":"fields","fields":["lead_details.bank.banklang.bank_name"],"confidence":0.95,"scope_hint":null}}
+- rm mobile -> {{"action":"fields","fields":["rmdetails.mobile"],"confidence":0.95,"scope_hint":null}}
+- which priority property details are missing? -> {{"action":"missing_fields","fields":[],"confidence":0.8,"scope_hint":"property","priority_only":true}}
+- priority details konsi missing hai? -> {{"action":"missing_fields","fields":[],"confidence":0.2,"scope_hint":null,"priority_only":true}}
 
 Loaded field index:
 {field_index}
@@ -351,14 +345,20 @@ def enrich_lead_query_plan(plan: dict | None, message: str) -> dict | None:
     if "priority" in normalized_message or "high priority" in normalized_message or "highest priority" in normalized_message:
         priority_only = True
 
-    query_terms = [message] if message.strip() else []
-    if priority_only:
-        query_terms = _priority_missing_domain_terms(_normalize_intent_text(message))
+    deterministic_filters = (
+        _priority_missing_filters(_normalize_intent_text(message))
+        if priority_only
+        else {}
+    )
 
     return {
         **plan,
         "priority_only": priority_only,
-        "query_terms": query_terms,
+        **{
+            key: value
+            for key, value in deterministic_filters.items()
+            if not plan.get("fields") and not plan.get("scope_hint")
+        },
     }
 
 
@@ -392,36 +392,47 @@ def is_no_refresh_confirmation(message: str) -> bool:
     return bool(tokens & {"no", "same"}) or "not updated" in normalized or "no refresh" in normalized
 
 
-PRIORITY_MISSING_DOMAIN_TERMS = (
+PRIORITY_MISSING_SCOPE_HINTS = (
     ("property", "property"),
-    ("builder", "builder"),
-    ("project", "project"),
-    ("agreement", "agreement"),
-    ("registration", "registration"),
     ("credit", "credit"),
-    ("cibil", "cibil"),
+    ("cibil", "credit"),
     ("income", "income"),
-    ("salary", "salary"),
-    ("profession", "profession"),
-    ("pancard", "pancard"),
-    ("pan", "pancard"),
-    ("bt", "bt"),
-    ("existing loan", "existing loan"),
-    ("previous loan", "previous loan"),
-    ("prev", "previous loan"),
-    ("emi", "previous loan"),
-    ("roi", "previous loan"),
-    ("tenure", "previous loan"),
+    ("salary", "income"),
+    ("profession", "income"),
+    ("bt", "loan"),
+    ("existing loan", "loan"),
+    ("previous loan", "loan"),
+    ("prev", "loan"),
+    ("emi", "loan"),
+    ("roi", "loan"),
+    ("tenure", "loan"),
 )
 
 
-def _priority_missing_domain_terms(normalized_message: str) -> list[str]:
-    terms: list[str] = []
+PRIORITY_MISSING_FIELD_HINTS = (
+    ("builder", "property_details.builder_id"),
+    ("project", "property_details.project_id"),
+    ("agreement", "property_details.agreement_type"),
+    ("registration", "property_details.registration_value"),
+    ("pancard", "customer.pancard_no"),
+    ("pan", "customer.pancard_no"),
+)
+
+
+def _priority_missing_filters(normalized_message: str) -> dict[str, Any]:
     padded = f" {normalized_message} "
-    for needle, term in PRIORITY_MISSING_DOMAIN_TERMS:
-        if f" {needle} " in padded and term not in terms:
-            terms.append(term)
-    return terms
+    fields: list[str] = []
+    for needle, field in PRIORITY_MISSING_FIELD_HINTS:
+        if f" {needle} " in padded and field not in fields:
+            fields.append(field)
+    if fields:
+        return {"fields": fields, "confidence": 0.9}
+
+    for needle, scope_hint in PRIORITY_MISSING_SCOPE_HINTS:
+        if f" {needle} " in padded:
+            return {"scope_hint": scope_hint, "confidence": 0.9}
+
+    return {"fields": [], "confidence": 0.2, "scope_hint": None}
 
 
 def build_deterministic_lead_query_plan(message: str) -> dict | None:
@@ -436,10 +447,8 @@ def build_deterministic_lead_query_plan(message: str) -> dict | None:
     if asks_missing and asks_priority and not asks_documents:
         return {
             "action": "missing_fields",
-            "scope_prefixes": [],
-            "field_groups": [],
-            "query_terms": _priority_missing_domain_terms(normalized),
             "priority_only": True,
+            **_priority_missing_filters(normalized),
         }
 
     return None
@@ -759,6 +768,26 @@ class LLMService:
                     model_name=model_name or self.settings.llm_summary_model,
                 )
             lead_plan = enrich_lead_query_plan(lead_plan, message)
+            all_fields = discover_lead_field_paths(searchable_lead_detail, lead_missing_fields)
+            lead_plan = sanitize_lead_query_plan(lead_plan, all_fields)
+            confidence = lead_plan.get("confidence") if isinstance(lead_plan, dict) else None
+            filtering_applied = bool(
+                isinstance(lead_plan, dict)
+                and (
+                    lead_plan.get("fields")
+                    or lead_plan.get("scope_hint")
+                    or lead_plan.get("scope_prefixes")
+                    or lead_plan.get("field_groups")
+                )
+            )
+            logger.info(
+                "Lead chat query plan: lead_id=%s message=%r plan=%s confidence=%s filtering_applied=%s",
+                lead_id,
+                message,
+                lead_plan,
+                confidence,
+                filtering_applied,
+            )
             lead_answer = execute_lead_query_plan(
                 searchable_lead_detail,
                 lead_plan,

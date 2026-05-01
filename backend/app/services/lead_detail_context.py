@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 PRIORITY_FIELDS_PATH = Path(__file__).resolve().parents[3] / "priority_fields.json"
 _PRIORITY_FIELDS_CACHE: tuple[float | None, list[str]] | None = None
 _PRIORITY_SET_CACHE: tuple[tuple[str, ...], set[str]] | None = None
+FIELD_FILTER_CONFIDENCE_THRESHOLD = 0.7
+MISSING_FIELDS_NONE_REPLY = "Missing fields: None found in loaded lead data."
+
+
+SCOPE_MAP = {
+    "property": ["property_details"],
+    "income": ["salary", "income"],
+    "credit": ["cibil", "credit"],
+    "loan": ["loan", "emi"],
+}
 
 
 @dataclass(frozen=True)
@@ -192,39 +202,6 @@ LEAD_FIELD_CATALOG = (
 )
 
 
-FIELD_GROUP_ALIASES = {
-    "existing_loan_bt": (
-        "bt",
-        "balance transfer",
-        "existing loan",
-        "old loan",
-        "previous loan",
-        "running loan",
-    ),
-}
-
-
-FIELD_SCOPE_ALIASES = {
-    "property_details": (
-        "property",
-        "property detail",
-        "property details",
-        "property info",
-        "property information",
-    ),
-    "customer": (
-        "customer",
-        "customer profile",
-        "profile",
-    ),
-    "lead_details": (
-        "lead",
-        "lead detail",
-        "lead details",
-    ),
-}
-
-
 QUERY_STOPWORDS = {
     "about",
     "are",
@@ -273,20 +250,6 @@ QUERY_STOPWORDS = {
     "the",
     "what",
     "which",
-}
-
-
-QUERY_TOKEN_EXPANSIONS = {
-    "bt": {"bt", "prev", "previous", "loan"},
-    "builder": {"builder"},
-    "credit": {"credit", "cibil"},
-    "cibil": {"cibil", "credit"},
-    "income": {"income", "salary"},
-    "loan": {"loan"},
-    "project": {"project"},
-    "property": {"property", "builder", "project", "agreement", "registration"},
-    "roi": {"roi"},
-    "salary": {"salary", "income"},
 }
 
 
@@ -437,12 +400,96 @@ def build_lead_field_index(lead_detail: dict[str, Any] | None, *, max_fields: in
     return fields
 
 
+def discover_lead_field_paths(
+    lead_detail: dict[str, Any] | None,
+    lead_missing_fields: list[dict[str, Any]] | None = None,
+) -> set[str]:
+    paths = {
+        path
+        for path, _value in iter_leaf_entries(lead_detail or {}, include_blank=True)
+        if path and not path.endswith(".__typename") and not path.endswith("__typename")
+    }
+    paths.update(load_priority_field_paths())
+    paths.update(spec.path for spec in LEAD_FIELD_CATALOG)
+    paths.update(
+        str(item.get("path") or "").strip()
+        for item in (lead_missing_fields or [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    )
+    return {path for path in paths if path}
+
+
+def _coerce_confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, confidence))
+
+
+def _resolve_valid_field_path(field: Any, all_fields: set[str]) -> str | None:
+    path = str(field or "").strip().strip(".")
+    if not path:
+        return None
+    if path in all_fields:
+        return path
+    for candidate in _equivalent_offer_paths(path):
+        if candidate in all_fields:
+            return candidate
+    return None
+
+
+def sanitize_lead_query_plan(plan: dict | None, all_fields: set[str]) -> dict | None:
+    if not isinstance(plan, dict):
+        return plan
+
+    action = str(plan.get("action") or "fallback").strip().lower()
+    confidence = _coerce_confidence(plan.get("confidence", 1.0))
+    raw_fields = plan.get("fields")
+    if not isinstance(raw_fields, list):
+        raw_fields = plan.get("paths") if isinstance(plan.get("paths"), list) else []
+
+    fields = list(
+        dict.fromkeys(
+            resolved
+            for raw_field in raw_fields
+            if (resolved := _resolve_valid_field_path(raw_field, all_fields))
+        )
+    )
+    if confidence < FIELD_FILTER_CONFIDENCE_THRESHOLD:
+        fields = []
+
+    scope_hint = str(plan.get("scope_hint") or "").strip().lower() or None
+    if scope_hint not in SCOPE_MAP or confidence < FIELD_FILTER_CONFIDENCE_THRESHOLD:
+        scope_hint = None
+
+    sanitized = {
+        "action": action,
+        "fields": fields,
+        "confidence": confidence,
+        "scope_hint": scope_hint,
+    }
+
+    if action == "fields":
+        sanitized["paths"] = fields
+    if plan.get("section_path"):
+        sanitized["section_path"] = plan.get("section_path")
+    if isinstance(plan.get("scope_prefixes"), list):
+        sanitized["scope_prefixes"] = plan["scope_prefixes"]
+    if isinstance(plan.get("field_groups"), list):
+        sanitized["field_groups"] = plan["field_groups"]
+    if "priority_only" in plan:
+        sanitized["priority_only"] = bool(plan.get("priority_only"))
+
+    return sanitized
+
+
 def build_lead_field_index_prompt(lead_detail: dict[str, Any] | None) -> str:
     fields = build_lead_field_index(lead_detail)
     if not fields:
         return "No loaded lead fields available."
     return "\n".join(
-        f"- {field['path']} | {field['label']} | {field['status']}"
+        f"- {field['path']} | {field['label']}"
         for field in fields
     )
 
@@ -550,36 +597,12 @@ def _tokenize_search_text(value: str) -> set[str]:
     }
 
 
-def _expanded_query_tokens(query_terms: list[str]) -> set[str]:
-    tokens: set[str] = set()
-    for term in query_terms:
-        tokens.update(_tokenize_search_text(str(term)))
-
-    expanded = set(tokens)
-    for token in tokens:
-        expanded.update(QUERY_TOKEN_EXPANSIONS.get(token, set()))
-    return expanded
-
-
 def _path_search_tokens(path: str) -> set[str]:
     tokens = _tokenize_search_text(path)
     tokens.update(_tokenize_search_text(_format_label(path)))
     for candidate in _equivalent_offer_paths(path):
         tokens.update(_tokenize_search_text(candidate))
     return tokens
-
-
-def _candidate_paths_for_query_terms(query_terms: list[str], candidate_paths: list[str]) -> set[str] | None:
-    query_tokens = _expanded_query_tokens(query_terms)
-    if not query_tokens:
-        return None
-
-    matched_paths = {
-        path
-        for path in candidate_paths
-        if query_tokens.intersection(_path_search_tokens(path))
-    }
-    return matched_paths
 
 
 def _catalog_paths_for_groups(groups: list[str]) -> set[str]:
@@ -589,61 +612,6 @@ def _catalog_paths_for_groups(groups: list[str]) -> set[str]:
         for spec in LEAD_FIELD_CATALOG
         if normalized_groups.intersection(spec.groups)
     }
-
-
-def _catalog_groups_for_terms(query_terms: list[str]) -> set[str]:
-    normalized_terms = {
-        _normalize_query_text(term)
-        for term in query_terms
-        if str(term).strip()
-    }
-    if not normalized_terms:
-        return set()
-
-    matched_groups: set[str] = set()
-    for group, aliases in FIELD_GROUP_ALIASES.items():
-        candidates = {_normalize_query_text(group.replace("_", " "))}
-        candidates.update(_normalize_query_text(alias) for alias in aliases)
-        if any(
-            term == candidate or term in candidate or candidate in term
-            for term in normalized_terms
-            for candidate in candidates
-        ):
-            matched_groups.add(group)
-
-    for spec in LEAD_FIELD_CATALOG:
-        candidates = {_normalize_query_text(spec.path), _normalize_query_text(_format_label(spec.path))}
-        candidates.update(_normalize_query_text(alias) for alias in spec.aliases)
-        if any(
-            term == candidate or term in candidate or candidate in term
-            for term in normalized_terms
-            for candidate in candidates
-        ):
-            matched_groups.update(spec.groups)
-
-    return matched_groups
-
-
-def _catalog_scopes_for_terms(query_terms: list[str]) -> set[str]:
-    normalized_terms = {
-        _normalize_query_text(term)
-        for term in query_terms
-        if str(term).strip()
-    }
-    if not normalized_terms:
-        return set()
-
-    matched_scopes: set[str] = set()
-    for scope, aliases in FIELD_SCOPE_ALIASES.items():
-        candidates = {_normalize_query_text(scope.replace("_", " "))}
-        candidates.update(_normalize_query_text(alias) for alias in aliases)
-        if any(
-            term == candidate or term in candidate or candidate in term
-            for term in normalized_terms
-            for candidate in candidates
-        ):
-            matched_scopes.add(scope)
-    return matched_scopes
 
 
 def _matches_any_scope(path: str, scope_prefixes: list[str]) -> bool:
@@ -676,9 +644,63 @@ def _matches_any_field_group(path: str, field_groups: list[str]) -> bool:
     return bool(candidates & expanded_allowed)
 
 
+def _matches_any_field_path(path: str, field_paths: set[str]) -> bool:
+    if not field_paths:
+        return True
+    candidates = set(_equivalent_offer_paths(path))
+    expanded_allowed = {
+        candidate
+        for field_path in field_paths
+        for candidate in _equivalent_offer_paths(field_path)
+    }
+    return bool(candidates & expanded_allowed)
+
+
+def _scope_hint_paths(scope_hint: Any, candidate_paths: list[str]) -> set[str] | None:
+    hint = str(scope_hint or "").strip().lower()
+    scope_terms = SCOPE_MAP.get(hint)
+    if not scope_terms:
+        return None
+
+    if hint == "loan":
+        allowed_paths = _catalog_paths_for_groups(["existing_loan_bt"])
+        expanded_allowed = {
+            candidate
+            for allowed_path in allowed_paths
+            for candidate in _equivalent_offer_paths(allowed_path)
+        }
+        return {
+            path
+            for path in candidate_paths
+            if set(_equivalent_offer_paths(path)) & expanded_allowed
+        }
+
+    matched_paths: set[str] = set()
+    for path in candidate_paths:
+        equivalent_paths = _equivalent_offer_paths(path)
+        for term in scope_terms:
+            normalized_term = _normalize_query_text(term)
+            if any(
+                candidate == term or candidate.startswith(f"{term}.")
+                for candidate in equivalent_paths
+            ):
+                matched_paths.add(path)
+                break
+
+            searchable_tokens: set[str] = set()
+            for candidate in equivalent_paths:
+                searchable_tokens.update(_path_search_tokens(candidate))
+            searchable_tokens.update(_tokenize_search_text(_format_label(path)))
+            if normalized_term in searchable_tokens:
+                matched_paths.add(path)
+                break
+
+    return matched_paths
+
+
 def _format_missing_field_rows(rows: list[tuple[str, str, bool]]) -> str:
     if not rows:
-        return "Missing fields: None found in loaded lead data."
+        return MISSING_FIELDS_NONE_REPLY
 
     priority_lines: list[str] = []
     other_lines: list[str] = []
@@ -777,14 +799,22 @@ def _execute_precomputed_missing_fields(
     lead_missing_fields: list[dict[str, Any]],
     scope_prefixes: list[Any],
     field_groups: list[Any],
-    query_terms: list[Any],
+    fields: list[Any],
+    scope_hint: Any,
     *,
     priority_only: bool = False,
 ) -> str:
     loaded_paths = [str(item.get("path") or "") for item in lead_missing_fields if isinstance(item, dict)]
-    valid_prefixes, requested_groups, query_matched_paths = _resolve_prefixes_and_groups(
-        scope_prefixes, field_groups, query_terms, loaded_paths=loaded_paths
+    valid_prefixes, requested_groups = _resolve_prefixes_and_groups(
+        scope_prefixes, field_groups, loaded_paths=loaded_paths
     )
+    valid_fields = {
+        resolved
+        for field in fields
+        if (resolved := _resolve_valid_field_path(field, set(loaded_paths)))
+    }
+    scope_paths = None if valid_fields else _scope_hint_paths(scope_hint, loaded_paths)
+    filtering_applied = bool(valid_fields or scope_paths or valid_prefixes or requested_groups)
 
     verified_loaded_debug: list[dict[str, Any]] = []
     verified_missing_debug: list[dict[str, Any]] = []
@@ -808,20 +838,25 @@ def _execute_precomputed_missing_fields(
                 verified_missing_debug.append({"path": path, "resolved_path": _resolved_path, "reason": item["reason"]})
             else:
                 verified_missing_debug.append({"path": path, "resolved_path": _resolved_path, "reason": item.get("reason")})
+        if valid_fields and not _matches_any_field_path(path, valid_fields):
+            continue
+        if scope_paths is not None and not _matches_any_field_path(path, scope_paths):
+            continue
         if valid_prefixes and not _matches_any_scope(path, valid_prefixes):
             continue
         if not _matches_any_field_group(path, requested_groups):
-            continue
-        if query_matched_paths is not None and path not in query_matched_paths:
             continue
         label = str(item.get("label") or _format_label(path)).strip()
         reason = str(item.get("reason") or "").replace("_", " ").strip()
         rows.append((label, reason, is_priority))
 
     logger.info(
-        "[LeadDebug][backend] precomputed missing verification: input_missing=%d returned_rows=%d verified_loaded_sample=%s verified_missing_sample=%s lead_detail_keys=%s",
+        "[LeadDebug][backend] precomputed missing verification: input_missing=%d returned_rows=%d filtering_applied=%s fields=%s scope_hint=%s verified_loaded_sample=%s verified_missing_sample=%s lead_detail_keys=%s",
         len(lead_missing_fields),
         len(rows),
+        filtering_applied,
+        sorted(valid_fields),
+        scope_hint,
         verified_loaded_debug[:12],
         verified_missing_debug[:12],
         list(lead_detail.keys())[:30],
@@ -832,28 +867,23 @@ def _execute_precomputed_missing_fields(
 def _resolve_prefixes_and_groups(
     scope_prefixes: list[Any],
     field_groups: list[Any],
-    query_terms: list[Any],
     loaded_paths: list[str] | None = None,
     lead_detail: dict[str, Any] | None = None,
-) -> tuple[list[str], list[str], set[str] | None]:
-    """Extract and resolve scope prefixes, field groups, and query-matched paths."""
-    query_texts = [str(term) for term in query_terms if str(term).strip()]
-    term_scopes = _catalog_scopes_for_terms(query_texts)
-    term_groups = _catalog_groups_for_terms(query_texts)
-
+) -> tuple[list[str], list[str]]:
+    """Extract and validate explicit scope prefixes and field groups."""
     plan_prefixes = [
         str(prefix).strip().strip(".")
         for prefix in scope_prefixes
         if str(prefix).strip().strip(".")
     ]
-    requested_prefixes = plan_prefixes if not query_texts else list(term_scopes)
+    requested_prefixes = plan_prefixes
 
     plan_groups = [
         str(group).strip().lower()
         for group in field_groups
         if str(group).strip()
     ]
-    requested_groups = plan_groups if not query_texts else list(term_groups)
+    requested_groups = plan_groups
 
     valid_prefixes = requested_prefixes
     if lead_detail is not None and loaded_paths is None:
@@ -866,37 +896,44 @@ def _resolve_prefixes_and_groups(
             if any(path == prefix or path.startswith(f"{prefix}.") for path in loaded_paths)
         ]
 
-    candidate_paths = loaded_paths if loaded_paths is not None else (
-        [path for path, _ in iter_leaf_entries(lead_detail, include_blank=True)
-         if not path.endswith(".__typename") and not path.endswith("__typename")]
-        + load_priority_field_paths()
-    )
-
-    query_matched_paths: set[str] | None = (
-        None
-        if valid_prefixes or requested_groups
-        else _candidate_paths_for_query_terms([str(term) for term in query_terms], candidate_paths)
-    )
-    return valid_prefixes, requested_groups, query_matched_paths
+    return valid_prefixes, requested_groups
 
 
 def _execute_missing_fields(
     lead_detail: dict[str, Any],
     scope_prefixes: list[Any],
     field_groups: list[Any],
-    query_terms: list[Any],
+    fields: list[Any],
+    scope_hint: Any,
     *,
     priority_only: bool = False,
 ) -> str:
-    prefixes, groups, query_matched_paths = _resolve_prefixes_and_groups(
-        scope_prefixes, field_groups, query_terms, lead_detail=lead_detail
+    prefixes, groups = _resolve_prefixes_and_groups(
+        scope_prefixes, field_groups, lead_detail=lead_detail
     )
+    candidate_paths = (
+        [
+            path
+            for path, _ in iter_leaf_entries(lead_detail, include_blank=True)
+            if not path.endswith(".__typename") and not path.endswith("__typename")
+        ]
+        + load_priority_field_paths()
+    )
+    candidate_path_set = set(candidate_paths)
+    valid_fields = {
+        resolved
+        for field in fields
+        if (resolved := _resolve_valid_field_path(field, candidate_path_set))
+    }
+    scope_paths = None if valid_fields else _scope_hint_paths(scope_hint, candidate_paths)
+    filtering_applied = bool(valid_fields or scope_paths or prefixes or groups)
     missing: list[tuple[str, str, bool]] = [
         (item["label"], item["reason"], True)
         for item in build_priority_missing_fields(lead_detail, None)
-        if _matches_any_scope(item["path"], prefixes)
+        if _matches_any_field_path(item["path"], valid_fields)
+        and (scope_paths is None or _matches_any_field_path(item["path"], scope_paths))
+        and _matches_any_scope(item["path"], prefixes)
         and _matches_any_field_group(item["path"], groups)
-        and (query_matched_paths is None or item["path"] in query_matched_paths)
     ]
     for path, _v in iter_leaf_entries(lead_detail, include_blank=True):
         if path.endswith(".__typename") or path.endswith("__typename"):
@@ -904,15 +941,26 @@ def _execute_missing_fields(
         is_priority = _is_priority_path(path)
         if priority_only and not is_priority:
             continue
+        if valid_fields and not _matches_any_field_path(path, valid_fields):
+            continue
+        if scope_paths is not None and not _matches_any_field_path(path, scope_paths):
+            continue
         if prefixes and not _matches_any_scope(path, prefixes):
             continue
         if not _matches_any_field_group(path, groups):
             continue
-        if query_matched_paths is not None and path not in query_matched_paths:
-            continue
         if _format_value(_v) == "Missing":
             missing.append((_format_label(path), _missing_reason(_v), is_priority))
 
+    logger.info(
+        "[LeadDebug][backend] dynamic missing execution: returned_rows=%d filtering_applied=%s fields=%s scope_hint=%s prefixes=%s groups=%s",
+        len(missing),
+        filtering_applied,
+        sorted(valid_fields),
+        scope_hint,
+        prefixes,
+        groups,
+    )
     return _format_missing_field_rows(missing)
 
 
@@ -997,15 +1045,19 @@ def execute_lead_query_plan(
 
     action = str(plan.get("action") or "").strip().lower()
     if action == "fields":
-        paths = plan.get("paths") if isinstance(plan.get("paths"), list) else []
+        paths = plan.get("fields") if isinstance(plan.get("fields"), list) else []
+        if not paths:
+            paths = plan.get("paths") if isinstance(plan.get("paths"), list) else []
         return _execute_fields(lead_detail, paths)
     if action == "section":
         return _execute_section(lead_detail, plan.get("section_path"))
     if action == "missing_fields":
         scope_prefixes = plan.get("scope_prefixes") if isinstance(plan.get("scope_prefixes"), list) else []
         field_groups = plan.get("field_groups") if isinstance(plan.get("field_groups"), list) else []
-        query_terms = plan.get("query_terms") if isinstance(plan.get("query_terms"), list) else []
+        fields = plan.get("fields") if isinstance(plan.get("fields"), list) else []
+        scope_hint = plan.get("scope_hint")
         priority_only = bool(plan.get("priority_only"))
+        filtering_requested = bool(fields or scope_hint or scope_prefixes or field_groups)
         if lead_missing_fields:
             combined_missing = list(lead_missing_fields)
             existing_paths = {
@@ -1016,21 +1068,50 @@ def execute_lead_query_plan(
             for priority_item in build_priority_missing_fields(lead_detail, lead_missing_fields):
                 if priority_item["path"] not in existing_paths:
                     combined_missing.append(priority_item)
-            return _execute_precomputed_missing_fields(
+            result = _execute_precomputed_missing_fields(
                 lead_detail,
                 combined_missing,
                 scope_prefixes,
                 field_groups,
-                query_terms,
+                fields,
+                scope_hint,
                 priority_only=priority_only,
             )
-        return _execute_missing_fields(
+            if filtering_requested and result == MISSING_FIELDS_NONE_REPLY:
+                logger.info(
+                    "[LeadDebug][backend] missing fields filtered result empty; retrying broad execution"
+                )
+                result = _execute_precomputed_missing_fields(
+                    lead_detail,
+                    combined_missing,
+                    [],
+                    [],
+                    [],
+                    None,
+                    priority_only=priority_only,
+                )
+            return result
+        result = _execute_missing_fields(
             lead_detail,
             scope_prefixes,
             field_groups,
-            query_terms,
+            fields,
+            scope_hint,
             priority_only=priority_only,
         )
+        if filtering_requested and result == MISSING_FIELDS_NONE_REPLY:
+            logger.info(
+                "[LeadDebug][backend] missing fields filtered result empty; retrying broad execution"
+            )
+            result = _execute_missing_fields(
+                lead_detail,
+                [],
+                [],
+                [],
+                None,
+                priority_only=priority_only,
+            )
+        return result
     if action == "missing_documents":
         return _execute_missing_documents(lead_detail)
     if action == "next_step":

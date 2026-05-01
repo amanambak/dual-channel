@@ -80,17 +80,38 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("Return only the data explicitly asked for", prompt)
-        self.assertIn("bank name? -> {\"action\":\"fields\",\"paths\":[\"lead_details.bank.banklang.bank_name\"]}", prompt)
-        self.assertIn("puri bank details -> {\"action\":\"section\",\"section_path\":\"lead_details.bank\"}", prompt)
+        self.assertIn("bank name? -> {\"action\":\"fields\",\"fields\":[\"lead_details.bank.banklang.bank_name\"]", prompt)
+        self.assertIn("Only return fields when highly confident", prompt)
         self.assertIn("rm mobile -> {\"action\":\"fields\"", prompt)
         self.assertIn(
-            "which priority property details are missing? -> {\"action\":\"missing_fields\",\"scope_prefixes\":[\"property_details\"],\"field_groups\":[],\"query_terms\":[\"property\"],\"priority_only\":true}",
+            "which priority property details are missing? -> {\"action\":\"missing_fields\",\"fields\":[],\"confidence\":0.8,\"scope_hint\":\"property\",\"priority_only\":true}",
             prompt,
         )
         self.assertIn(
-            "missing Existing Loan / BT details -> {\"action\":\"missing_fields\",\"scope_prefixes\":[],\"field_groups\":[],\"query_terms\":[\"existing loan\",\"bt\"],\"priority_only\":true}",
+            "priority details konsi missing hai? -> {\"action\":\"missing_fields\",\"fields\":[],\"confidence\":0.2,\"scope_hint\":null,\"priority_only\":true}",
             prompt,
         )
+        self.assertNotIn("query_terms", prompt)
+
+    def test_sanitize_lead_query_plan_drops_query_terms_and_low_confidence_fields(self):
+        from app.services.lead_detail_context import sanitize_lead_query_plan
+
+        plan = sanitize_lead_query_plan(
+            {
+                "action": "missing_fields",
+                "fields": ["lead_details.cibil_score", "fake.path"],
+                "query_terms": ["konsi", "details"],
+                "confidence": 0.2,
+                "scope_hint": "property",
+            },
+            {"lead_details.cibil_score", "property_details.builder_id"},
+        )
+
+        self.assertEqual(plan["action"], "missing_fields")
+        self.assertEqual(plan["fields"], [])
+        self.assertEqual(plan["confidence"], 0.2)
+        self.assertEqual(plan["scope_hint"], None)
+        self.assertNotIn("query_terms", plan)
 
     def test_normalize_extracted_fields_scales_lakh_values(self):
         from app.services.schema_normalizer import normalize_extracted_fields
@@ -1057,6 +1078,92 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("- Cibil score (empty string)", reply)
             self.assertIn("- Prev emi amount (null)", reply)
             self.assertIn("- Builder id (null)", reply)
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
+
+    async def test_low_confidence_missing_plan_ignores_query_terms_and_runs_broad(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+            self.mock_lead_plan(
+                service,
+                {
+                    "action": "missing_fields",
+                    "query_terms": ["konsi", "details"],
+                    "fields": ["fake.path"],
+                    "confidence": 0.2,
+                    "priority_only": True,
+                },
+            )
+
+            reply = await service.generate_chat_reply(
+                "priority details konsi missing hai?",
+                lead_id=644,
+                lead_facts={
+                    "lead_details.cibil_score": "",
+                    "lead_details.prev_emi_amount": None,
+                    "property_details.builder_id": None,
+                },
+            )
+
+            self.assertIn("- Cibil score (empty string)", reply)
+            self.assertIn("- Prev emi amount (null)", reply)
+            self.assertIn("- Builder id (null)", reply)
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
+
+    async def test_property_scope_hint_filters_missing_fields_without_query_terms(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+            self.mock_lead_plan(
+                service,
+                {
+                    "action": "missing_fields",
+                    "fields": [],
+                    "confidence": 0.8,
+                    "scope_hint": "property",
+                    "priority_only": True,
+                },
+            )
+
+            reply = await service.generate_chat_reply(
+                "property ke missing details",
+                lead_id=644,
+                lead_facts={
+                    "lead_details.cibil_score": "",
+                    "lead_details.prev_emi_amount": None,
+                    "property_details.is_property_identified": "yes",
+                    "property_details.property_city": "67",
+                    "property_details.property_state": "65",
+                    "property_details.expected_market_value": "5000000",
+                    "property_details.registration_value": "4500000",
+                    "property_details.property_type": "1",
+                    "property_details.property_sub_type": "2",
+                    "property_details.agreement_type": "registered",
+                    "property_details.builder_id": None,
+                    "property_details.project_id": None,
+                    "property_details.check_oc_cc": "1",
+                    "property_details.ready_for_registration": "1",
+                },
+            )
+
+            self.assertEqual(
+                reply,
+                "High priority missing fields:\n"
+                "- Builder id (null)\n"
+                "- Project id (null)",
+            )
+            self.assertNotIn("Cibil", reply)
+            self.assertNotIn("Prev emi", reply)
             fake_rag.hybrid_search.assert_not_awaited()
             service.generate_text.assert_not_awaited()
 
