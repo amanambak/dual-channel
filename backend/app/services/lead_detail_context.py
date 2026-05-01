@@ -24,24 +24,6 @@ IMPORTANT_PATHS = {
     "status_info.statuslang.status_name",
     "sub_status_info.substatuslang.sub_status_name",
     "customer.customer_id",
-    "customer.first_name",
-    "customer.last_name",
-    "customer.mobile",
-    "customer.email",
-    "customer.pancard_no",
-    "customer.dob",
-    "customer.gender",
-    "customer.marital_status",
-    "customer.occupation",
-    "customer.official_email_id",
-    "customer.employment.employer_name",
-    "customer.employment.designation",
-    "customer.employment.gross_monthly_income",
-    "customer.employment.year_with_company",
-    "customer.bank_details.bank_id",
-    "customer.bank_details.branch_name",
-    "customer.bank_details.account_name",
-    "customer.bank_details.account_type",
     "lead_details.lead_id",
     "lead_details.bank_id",
     "lead_details.loan_amount",
@@ -90,6 +72,16 @@ def normalize_lead_detail_payload(lead_detail: Any) -> dict[str, Any] | None:
     if isinstance(lead_detail, list):
         return next((item for item in lead_detail if isinstance(item, dict)), None)
     return None
+
+
+def _normalize_fact_payload(lead_facts: Any) -> dict[str, Any] | None:
+    if not isinstance(lead_facts, dict):
+        return None
+    return {
+        str(key): value
+        for key, value in lead_facts.items()
+        if value not in (None, "")
+    }
 
 
 def _iter_leaf_values(value: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
@@ -324,12 +316,33 @@ def _doc_name(doc: dict[str, Any]) -> str:
     return f"Document {doc_id}" if doc_id not in (None, "") else "Document"
 
 
+def _normalize_document_key(value: str) -> str:
+    return _normalize_lookup_text(value)
+
+
+def _document_dedup_key(doc: dict[str, Any], name: str) -> str:
+    if doc.get("doc_id") not in (None, ""):
+        return f"doc:{doc.get('doc_id')}"
+    if doc.get("parent_doc_id") not in (None, ""):
+        return f"parent:{doc.get('parent_doc_id')}"
+    normalized_name = _normalize_document_key(name)
+    return f"name:{normalized_name or 'document'}"
+
+
+def _should_replace_document_name(existing_name: str, candidate_name: str) -> bool:
+    existing_key = _normalize_document_key(existing_name)
+    candidate_key = _normalize_document_key(candidate_name)
+    if not candidate_key or existing_key == candidate_key:
+        return False
+    return existing_key == "document" or bool(re.fullmatch(r"document \d+", existing_key))
+
+
 def _is_uploaded_doc(doc: dict[str, Any]) -> bool:
     if "is_doc_uploaded" in doc:
         return doc.get("is_doc_uploaded") in (1, "1", True)
     if doc.get("doc_upload_url") or doc.get("doc_path"):
         return True
-    status = _normalize_lookup_text(str(doc.get("status") or ""))
+    status = _normalize_lookup_text(str(doc.get("status") or doc.get("doc_status") or ""))
     return any(term in status for term in ("uploaded", "approved", "verified", "complete", "completed"))
 
 
@@ -346,12 +359,12 @@ def _document_buckets(
 
     for doc in docs:
         name = _doc_name(doc)
-        key = str(doc.get("doc_id") or doc.get("parent_doc_id") or _normalize_lookup_text(name))
+        key = _document_dedup_key(doc, name)
         existing = by_key.get(key)
         is_uploaded = _is_uploaded_doc(doc)
         if existing:
             existing["uploaded"] = bool(existing["uploaded"] or is_uploaded)
-            if existing["name"] == "Document" and name != "Document":
+            if _should_replace_document_name(str(existing["name"]), name):
                 existing["name"] = name
         else:
             by_key[key] = {"name": name, "uploaded": is_uploaded}
@@ -365,24 +378,238 @@ def _format_doc_list(values: list[str]) -> str:
     return ", ".join(values) if values else "None"
 
 
-def find_direct_dre_document_answer(
-    message: str,
+def _normalize_document_status_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+
+    normalized: list[str] = []
+    for value in values:
+        if isinstance(value, dict):
+            name = _doc_name(value)
+        else:
+            name = _format_value(value, max_chars=120)
+        if name not in ("", "None"):
+            normalized.append(name)
+    return normalized
+
+
+def _compact_document_buckets(
+    lead_document_status: Any,
+) -> tuple[list[str], list[str], int | None] | None:
+    if not isinstance(lead_document_status, dict):
+        return None
+
+    uploaded_keys = ("uploaded_documents", "uploadedDocuments", "uploaded")
+    missing_keys = ("missing_documents", "missingDocuments", "missing", "pending_documents")
+    has_document_fields = any(key in lead_document_status for key in (*uploaded_keys, *missing_keys))
+    if not has_document_fields and "total_required_documents" not in lead_document_status:
+        return None
+
+    uploaded = _normalize_document_status_list(
+        next((lead_document_status.get(key) for key in uploaded_keys if key in lead_document_status), [])
+    )
+    missing = _normalize_document_status_list(
+        next((lead_document_status.get(key) for key in missing_keys if key in lead_document_status), [])
+    )
+    raw_total = (
+        lead_document_status.get("total_required_documents")
+        or lead_document_status.get("totalRequiredDocuments")
+    )
+    try:
+        total = int(raw_total) if raw_total not in (None, "") else len(uploaded) + len(missing)
+    except (TypeError, ValueError):
+        total = len(uploaded) + len(missing)
+    return uploaded, missing, total
+
+
+def _document_status(
     *,
-    lead_detail: dict[str, Any] | None = None,
+    lead_detail: dict[str, Any] | None,
     lead_dre_documents: Any = None,
-    lead_dre_document_error: str | None = None,
-) -> str:
-    if not _looks_like_document_question(message):
-        return ""
+    lead_document_status: Any = None,
+) -> tuple[list[str], list[str], int | None]:
+    compact = _compact_document_buckets(lead_document_status)
+    if compact is not None:
+        return compact
 
     uploaded, missing = _document_buckets(
         lead_detail=lead_detail,
         lead_dre_documents=lead_dre_documents,
     )
-    if not uploaded and not missing:
+    total = len(uploaded) + len(missing) if uploaded or missing else None
+    return uploaded, missing, total
+
+
+def _document_status_dict(
+    *,
+    lead_detail: dict[str, Any] | None,
+    lead_dre_documents: Any = None,
+    lead_document_status: Any = None,
+) -> dict[str, Any]:
+    uploaded, missing, total_required = _document_status(
+        lead_detail=lead_detail,
+        lead_dre_documents=lead_dre_documents,
+        lead_document_status=lead_document_status,
+    )
+    return {
+        "uploaded_documents": uploaded,
+        "missing_documents": missing,
+        "total_required_documents": total_required if total_required is not None else 0,
+    }
+
+
+def build_lead_context(
+    *,
+    lead_id: str | int | None = None,
+    lead_detail: Any = None,
+    lead_dre_documents: Any = None,
+    lead_dre_document_error: str | None = None,
+    lead_document_status: Any = None,
+    lead_facts: Any = None,
+) -> dict[str, Any]:
+    """Build the canonical backend-owned interpretation of an Ambak lead."""
+    normalized_lead_detail = normalize_lead_detail_payload(lead_detail)
+    fallback_facts = _normalize_fact_payload(lead_facts)
+    facts_source: dict[str, Any] | None = normalized_lead_detail or fallback_facts
+    facts = dict(_iter_leaf_values(facts_source or {}))
+    effective_lead_id = (
+        lead_id
+        or (normalized_lead_detail or {}).get("id")
+        or (normalized_lead_detail or {}).get("ref_lead_id")
+        or facts.get("id")
+        or facts.get("ref_lead_id")
+        or facts.get("lead_details.lead_id")
+    )
+    dre_status = _effective_dre_status(facts_source or {})
+    document_status = _document_status_dict(
+        lead_detail=normalized_lead_detail or fallback_facts,
+        lead_dre_documents=lead_dre_documents,
+        lead_document_status=lead_document_status,
+    )
+    return {
+        "lead_id": effective_lead_id,
+        "dre_status": dre_status or None,
+        "facts": facts,
+        "document_status": document_status,
+        "document_error": lead_dre_document_error or None,
+        "lead_detail": normalized_lead_detail,
+    }
+
+
+def _lead_context_payload(lead_context: Any) -> dict[str, Any] | None:
+    if not isinstance(lead_context, dict):
+        return None
+    return lead_context
+
+
+def _lead_context_detail(lead_context: Any) -> dict[str, Any] | None:
+    payload = _lead_context_payload(lead_context)
+    if not payload:
+        return None
+    detail = normalize_lead_detail_payload(payload.get("lead_detail"))
+    if detail:
+        return detail
+    facts = payload.get("facts")
+    return _normalize_fact_payload(facts)
+
+
+def _lead_context_document_status(lead_context: Any) -> Any:
+    payload = _lead_context_payload(lead_context)
+    if not payload:
+        return None
+    return payload.get("document_status")
+
+
+def _lead_context_document_error(lead_context: Any) -> str | None:
+    payload = _lead_context_payload(lead_context)
+    if not payload or payload.get("document_error") in (None, ""):
+        return None
+    return str(payload.get("document_error"))
+
+
+def _lead_context_dre_status(lead_context: Any) -> str:
+    payload = _lead_context_payload(lead_context)
+    if not payload or payload.get("dre_status") in (None, ""):
+        return ""
+    return str(payload.get("dre_status"))
+
+
+def _format_document_status_section(
+    *,
+    lead_detail: dict[str, Any] | None,
+    lead_dre_documents: Any = None,
+    lead_document_status: Any = None,
+    lead_dre_document_error: str | None = None,
+) -> str:
+    uploaded, missing, total_required = _document_status(
+        lead_detail=lead_detail,
+        lead_dre_documents=lead_dre_documents,
+        lead_document_status=lead_document_status,
+    )
+    if not uploaded and not missing and total_required in (None, 0) and lead_dre_document_error:
+        return f"DRE document status unavailable: {lead_dre_document_error}"
+    if uploaded or missing or total_required is not None:
+        lines = [
+            "DRE document status:",
+            f"- Uploaded documents: {_format_doc_list(uploaded)}",
+            f"- Missing documents: {_format_doc_list(missing)}",
+        ]
+        if total_required is not None:
+            lines.append(f"- Total required documents: {total_required}")
+        return "\n".join(lines)
+    if lead_dre_document_error:
+        return f"DRE document status unavailable: {lead_dre_document_error}"
+    return ""
+
+
+def find_direct_dre_document_answer(
+    message: str,
+    *,
+    lead_detail: dict[str, Any] | None = None,
+    lead_dre_documents: Any = None,
+    lead_document_status: Any = None,
+    lead_dre_document_error: str | None = None,
+    lead_context: Any = None,
+) -> str:
+    if not _looks_like_document_question(message):
+        return ""
+    normalized = _normalize_lookup_text(message)
+    document_specific_terms = {
+        "document",
+        "documents",
+        "doc",
+        "docs",
+        "missing",
+        "pending",
+        "uploaded",
+        "upload",
+    }
+    if "dre" in normalized.split() and not (set(normalized.split()) & document_specific_terms):
+        return ""
+
+    lead_detail = lead_detail or _lead_context_detail(lead_context)
+    lead_document_status = lead_document_status or _lead_context_document_status(lead_context)
+    lead_dre_document_error = lead_dre_document_error or _lead_context_document_error(lead_context)
+
+    uploaded, missing, total_required = _document_status(
+        lead_detail=lead_detail,
+        lead_dre_documents=lead_dre_documents,
+        lead_document_status=lead_document_status,
+    )
+    if not uploaded and not missing and total_required in (None, 0) and lead_dre_document_error:
+        return f"DRE document status is not available: {lead_dre_document_error}"
+    if not uploaded and not missing and total_required is None:
         if lead_dre_document_error:
             return f"DRE document status is not available: {lead_dre_document_error}"
         return "DRE document status is not available for the loaded lead."
+
+    tokens = set(normalized.split())
+    asks_missing = bool(tokens & {"missing", "pending"})
+    asks_uploaded = bool(tokens & {"uploaded", "upload"})
+    if asks_missing and not asks_uploaded:
+        return f"Missing documents: {_format_doc_list(missing)}"
+    if asks_uploaded and not asks_missing:
+        return f"Uploaded documents: {_format_doc_list(uploaded)}"
 
     return "\n".join(
         [
@@ -392,7 +619,13 @@ def find_direct_dre_document_answer(
     )
 
 
-def find_direct_lead_detail_answer(message: str, lead_detail: dict[str, Any] | None) -> str:
+def find_direct_lead_detail_answer(
+    message: str,
+    lead_detail: dict[str, Any] | None,
+    *,
+    lead_context: Any = None,
+) -> str:
+    lead_detail = lead_detail or _lead_context_detail(lead_context)
     if not lead_detail or not _looks_like_lead_detail_question(message):
         return ""
 
@@ -434,11 +667,41 @@ def build_lead_detail_chat_context(
     lead_id: str | int | None,
     lead_detail: dict[str, Any] | None,
     lead_dre_documents: Any = None,
+    lead_document_status: Any = None,
     lead_dre_document_error: str | None = None,
+    lead_context: Any = None,
+    document_only: bool = False,
     max_flat_fields: int = 160,
 ) -> str:
-    if not lead_detail:
+    if lead_context:
+        lead_detail = lead_detail or _lead_context_detail(lead_context)
+        lead_document_status = lead_document_status or _lead_context_document_status(lead_context)
+        lead_dre_document_error = lead_dre_document_error or _lead_context_document_error(lead_context)
+        lead_id = lead_id or (_lead_context_payload(lead_context) or {}).get("lead_id")
+
+    if not lead_detail and not lead_document_status and not lead_dre_document_error:
         return ""
+
+    lead_detail = lead_detail or {}
+    lead_label = lead_id or lead_detail.get("id") or lead_detail.get("ref_lead_id") or "unknown"
+    dre_status = _lead_context_dre_status(lead_context) or _effective_dre_status(lead_detail)
+
+    if document_only:
+        sections = [
+            "Loaded Ambak lead document context. Use this DRE document status first when the user asks about this lead's documents.",
+            f"Lead ID: {lead_label}",
+        ]
+        if dre_status:
+            sections.append(f"Effective DRE status: {dre_status}")
+        document_section = _format_document_status_section(
+            lead_detail=lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+        )
+        if document_section:
+            sections.append(document_section)
+        return "\n\n".join(sections)
 
     flattened = list(_iter_leaf_values(lead_detail))
     important_lines: list[str] = []
@@ -457,13 +720,11 @@ def build_lead_detail_chat_context(
         if len(searchable_lines) >= max_flat_fields:
             break
 
-    lead_label = lead_id or lead_detail.get("id") or lead_detail.get("ref_lead_id") or "unknown"
     sections = [
         "Loaded Ambak lead detail context. Use this customer/lead data first when the user asks about this lead.",
         f"Lead ID: {lead_label}",
         "Answer only from these loaded lead details when the question is about customer, loan, lead, status, bank, RM, partner, property, income, CIBIL, or contact fields.",
     ]
-    dre_status = _effective_dre_status(lead_detail)
     if dre_status:
         sections.append(f"Effective DRE status: {dre_status}")
 
@@ -472,17 +733,13 @@ def build_lead_detail_chat_context(
     if searchable_lines:
         sections.append("Additional searchable loaded fields:\n" + "\n".join(searchable_lines))
 
-    uploaded, missing = _document_buckets(
+    document_section = _format_document_status_section(
         lead_detail=lead_detail,
         lead_dre_documents=lead_dre_documents,
+        lead_document_status=lead_document_status,
+        lead_dre_document_error=lead_dre_document_error,
     )
-    if uploaded or missing:
-        sections.append(
-            "DRE document status:\n"
-            f"- Uploaded documents: {_format_doc_list(uploaded)}\n"
-            f"- Missing documents: {_format_doc_list(missing)}"
-        )
-    elif lead_dre_document_error:
-        sections.append(f"DRE document status unavailable: {lead_dre_document_error}")
+    if document_section:
+        sections.append(document_section)
 
     return "\n\n".join(sections)

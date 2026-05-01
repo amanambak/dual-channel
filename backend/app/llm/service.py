@@ -11,6 +11,9 @@ from pydantic.types import SecretStr
 
 from app.core.config import get_settings
 from app.services.lead_detail_context import build_lead_detail_chat_context
+from app.services.lead_detail_context import build_lead_context
+from app.services.lead_detail_context import find_direct_dre_document_answer
+from app.services.lead_detail_context import find_direct_lead_detail_answer
 from app.services.lead_detail_context import looks_like_document_question
 from app.services.lead_detail_context import normalize_lead_detail_payload
 from app.services.schema_normalizer import normalize_extracted_fields
@@ -513,14 +516,53 @@ class LLMService:
         lead_detail: dict | None = None,
         lead_facts: dict | None = None,
         lead_dre_documents: object | None = None,
+        lead_document_status: object | None = None,
         lead_dre_document_error: str | None = None,
+        lead_context: dict | None = None,
         model_name: str | None = None,
     ) -> str:
         timings: dict[str, float] = {}
         overall_start = time.perf_counter()
         normalized_lead_detail = normalize_lead_detail_payload(lead_detail)
-        searchable_lead_detail = normalized_lead_detail or lead_facts
+        canonical_lead_context = lead_context or build_lead_context(
+            lead_id=lead_id,
+            lead_detail=normalized_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_document_status=lead_document_status,
+            lead_facts=lead_facts,
+        )
+        searchable_lead_detail = normalized_lead_detail or canonical_lead_context.get("lead_detail") or canonical_lead_context.get("facts") or lead_facts
         is_document_question = looks_like_document_question(message)
+
+        direct_document_answer = find_direct_dre_document_answer(
+            message,
+            lead_detail=normalized_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_context=canonical_lead_context,
+        )
+        if direct_document_answer:
+            logger.info(
+                "Lead chat answered directly from document context: message_len=%d total_ms=%.2f",
+                len(message),
+                (time.perf_counter() - overall_start) * 1000.0,
+            )
+            return direct_document_answer
+
+        direct_lead_answer = find_direct_lead_detail_answer(
+            message,
+            searchable_lead_detail,
+            lead_context=canonical_lead_context,
+        )
+        if direct_lead_answer:
+            logger.info(
+                "Lead chat answered directly from loaded lead context: message_len=%d total_ms=%.2f",
+                len(message),
+                (time.perf_counter() - overall_start) * 1000.0,
+            )
+            return direct_lead_answer
 
         # 1. Retrieve relevant context
         retrieval_start = time.perf_counter()
@@ -542,7 +584,10 @@ class LLMService:
             lead_id=lead_id,
             lead_detail=searchable_lead_detail,
             lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
             lead_dre_document_error=lead_dre_document_error,
+            lead_context=canonical_lead_context,
+            document_only=is_document_question,
         )
         
         # 2. Build prompt with context

@@ -185,6 +185,38 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["lead_detail"]["customer"]["customer_id"], 21088)
         self.assertEqual(kwargs["lead_dre_documents"], payload["lead_dre_documents"])
 
+    async def test_chat_route_accepts_compact_document_status(self):
+        os.environ.setdefault("GOOGLE_API_KEY", "test-key")
+        os.environ.setdefault("GEMINI_API_KEY", "test-key")
+
+        payload = {
+            "message": "which documents are missing?",
+            "lead_id": 674,
+            "lead_detail": {"id": 674},
+            "lead_document_status": {
+                "uploaded_documents": ["PAN Card"],
+                "missing_documents": ["Aadhaar Card"],
+                "total_required_documents": 2,
+            },
+        }
+
+        with patch(
+            "app.api.websocket.llm_service.generate_chat_reply",
+            new=AsyncMock(return_value="Uploaded documents: PAN Card\nMissing documents: Aadhaar Card"),
+        ) as mock_generate:
+            from app.api.websocket import ChatRequest, chat_reply
+
+            response = await chat_reply(ChatRequest(**payload))
+
+        self.assertEqual(
+            response["reply"],
+            "Uploaded documents: PAN Card\nMissing documents: Aadhaar Card",
+        )
+        self.assertTrue(response["lead_context_used"])
+        _, kwargs = mock_generate.await_args
+        self.assertEqual(kwargs["lead_document_status"], payload["lead_document_status"])
+        self.assertIsNone(kwargs["lead_dre_documents"])
+
     def test_lead_detail_context_flattens_key_fields(self):
         from app.services.lead_detail_context import build_lead_detail_chat_context
 
@@ -236,6 +268,76 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Uploaded documents: PAN Card", context)
         self.assertIn("Missing documents: Bank Statement", context)
 
+    def test_lead_detail_context_includes_compact_dre_document_summary(self):
+        from app.services.lead_detail_context import build_lead_detail_chat_context
+
+        context = build_lead_detail_chat_context(
+            lead_id=668,
+            lead_detail={"id": 668},
+            lead_document_status={
+                "uploaded_documents": ["PAN Card"],
+                "missing_documents": ["Bank Statement"],
+                "total_required_documents": 2,
+            },
+        )
+
+        self.assertIn("DRE document status", context)
+        self.assertIn("Uploaded documents: PAN Card", context)
+        self.assertIn("Missing documents: Bank Statement", context)
+        self.assertIn("Total required documents: 2", context)
+
+    def test_build_lead_context_dedupes_documents_and_replaces_generic_name(self):
+        from app.services.lead_detail_context import build_lead_context
+
+        context = build_lead_context(
+            lead_id=668,
+            lead_detail={
+                "id": 668,
+                "customer": {
+                    "dre_executed": 0,
+                    "recommended_docs": [
+                        {"doc_id": 12, "is_doc_uploaded": 0},
+                    ],
+                },
+                "lead_details": {"dre_executed": 1},
+            },
+            lead_dre_documents={
+                "documents": [
+                    {"doc_id": 12, "child_name": "PAN Card", "doc_path": "pan.pdf"},
+                    {"child_name": "Bank Statement", "is_doc_uploaded": 0},
+                ]
+            },
+        )
+
+        self.assertEqual(context["lead_id"], 668)
+        self.assertEqual(context["dre_status"], "Executed")
+        self.assertEqual(context["document_status"]["uploaded_documents"], ["PAN Card"])
+        self.assertEqual(context["document_status"]["missing_documents"], ["Bank Statement"])
+        self.assertEqual(context["document_status"]["total_required_documents"], 2)
+        self.assertIn("lead_details.dre_executed", context["facts"])
+
+    async def test_lead_context_route_returns_backend_normalized_context(self):
+        os.environ.setdefault("GOOGLE_API_KEY", "test-key")
+        os.environ.setdefault("GEMINI_API_KEY", "test-key")
+
+        from app.api.websocket import LeadContextRequest, lead_context
+
+        response = await lead_context(
+            LeadContextRequest(
+                lead_id=674,
+                lead_detail={"id": 674, "lead_details": {"dre_executed": 1}},
+                lead_dre_documents={
+                    "documents": [
+                        {"child_name": "PAN Card", "doc_path": "pan.pdf"},
+                    ]
+                },
+            )
+        )
+
+        self.assertEqual(response["lead_id"], 674)
+        self.assertEqual(response["dre_status"], "Executed")
+        self.assertEqual(response["document_status"]["uploaded_documents"], ["PAN Card"])
+
     async def test_chat_sends_loaded_lead_field_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
             fake_rag = mock_rag_cls.return_value
@@ -258,10 +360,9 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_detail={"partner_name": "Ambak Partner"},
             )
 
-            self.assertEqual(reply, "Partner name Ambak Partner hai.")
-            fake_rag.hybrid_search.assert_awaited_once_with("what is partner name?")
-            service.generate_text.assert_awaited_once()
-            self.assertIn("partner_name: Ambak Partner", captured_prompt["prompt"])
+            self.assertEqual(reply, "Partner name: Ambak Partner")
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
 
     async def test_chat_sends_flat_facts_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
@@ -285,10 +386,9 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_facts={"customer.first_name": "Aman"},
             )
 
-            self.assertEqual(reply, "Customer first name Aman hai.")
-            fake_rag.hybrid_search.assert_awaited_once_with("what is customer first name?")
-            service.generate_text.assert_awaited_once()
-            self.assertIn("customer.first_name: Aman", captured_prompt["prompt"])
+            self.assertEqual(reply, "First name: Aman")
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
 
     async def test_chat_sends_grouped_customer_name_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
@@ -312,11 +412,9 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_facts={"customer.first_name": "Gautam", "customer.last_name": "Gambhir"},
             )
 
-            self.assertEqual(reply, "Customer name Gautam Gambhir hai.")
-            fake_rag.hybrid_search.assert_awaited_once_with("what is customer name?")
-            service.generate_text.assert_awaited_once()
-            self.assertIn("customer.first_name: Gautam", captured_prompt["prompt"])
-            self.assertIn("customer.last_name: Gambhir", captured_prompt["prompt"])
+            self.assertEqual(reply, "Customer name: Gautam Gambhir")
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
 
     async def test_chat_sends_followup_data_to_llm(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
@@ -340,11 +438,9 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_facts={"followup_date": "28 April 2026", "followup_type": "call"},
             )
 
-            self.assertEqual(reply, "Followup 28 April 2026 ko call hai.")
-            fake_rag.hybrid_search.assert_awaited_once_with("what is followup data?")
-            service.generate_text.assert_awaited_once()
-            self.assertIn("followup_date: 28 April 2026", captured_prompt["prompt"])
-            self.assertIn("followup_type: call", captured_prompt["prompt"])
+            self.assertEqual(reply, "Followup date: 28 April 2026\nFollowup type: call")
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
 
     async def test_chat_sends_dre_document_status_to_llm_without_rag(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
@@ -383,14 +479,68 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-            self.assertEqual(reply, "Uploaded PAN Card hai. Missing Aadhaar Card aur Salary Slip hai.")
+            self.assertEqual(reply, "Missing documents: Aadhaar Card, Salary Slip")
             fake_rag.hybrid_search.assert_not_awaited()
-            service.generate_text.assert_awaited_once()
-            prompt = captured_prompt["prompt"]
-            self.assertIn("DRE document status", prompt)
-            self.assertIn("Uploaded documents: PAN Card", prompt)
-            self.assertIn("Missing documents: Aadhaar Card, Salary Slip", prompt)
-            self.assertIn("No relevant policy documents needed for this lead document question.", prompt)
+            service.generate_text.assert_not_awaited()
+
+    async def test_chat_sends_only_uploaded_documents_when_asked(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+            service.generate_text = AsyncMock(return_value="Should not call model.")
+
+            reply = await service.generate_chat_reply(
+                "Which documents are uploaded?",
+                lead_id=674,
+                lead_document_status={
+                    "uploaded_documents": ["PAN Card"],
+                    "missing_documents": ["Aadhaar Card"],
+                    "total_required_documents": 2,
+                },
+            )
+
+            self.assertEqual(reply, "Uploaded documents: PAN Card")
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
+
+    async def test_chat_sends_compact_dre_document_status_without_flattened_lead_fields(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+            captured_prompt = {}
+
+            async def fake_generate_text(prompt: str, *, model_name: str | None = None) -> str:
+                captured_prompt["prompt"] = prompt
+                return "PAN uploaded hai. Aadhaar missing hai."
+
+            service.generate_text = AsyncMock(side_effect=fake_generate_text)
+
+            reply = await service.generate_chat_reply(
+                "Which documents are missing?",
+                lead_id=674,
+                lead_detail={
+                    "id": 674,
+                    "customer": {"email": "customer@example.com"},
+                    "lead_details": {"loan_amount": 2500000, "dre_executed": 1},
+                },
+                lead_document_status={
+                    "uploaded_documents": ["PAN Card"],
+                    "missing_documents": ["Aadhaar Card"],
+                    "total_required_documents": 2,
+                },
+            )
+
+            self.assertEqual(reply, "Missing documents: Aadhaar Card")
+            fake_rag.hybrid_search.assert_not_awaited()
+            service.generate_text.assert_not_awaited()
 
     async def test_chat_sends_dre_document_error_to_llm_without_rag(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
@@ -415,13 +565,9 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 lead_dre_document_error="Lead DRE document API failed with HTTP 500.",
             )
 
-            self.assertEqual(reply, "DRE document status abhi available nahi hai.")
+            self.assertEqual(reply, "DRE document status is not available: Lead DRE document API failed with HTTP 500.")
             fake_rag.hybrid_search.assert_not_awaited()
-            service.generate_text.assert_awaited_once()
-            self.assertIn(
-                "DRE document status unavailable: Lead DRE document API failed with HTTP 500.",
-                captured_prompt["prompt"],
-            )
+            service.generate_text.assert_not_awaited()
 
 
 if __name__ == "__main__":

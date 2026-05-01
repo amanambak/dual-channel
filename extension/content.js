@@ -33,7 +33,17 @@ function isAccessTokenKey(key) {
 
 function normalizeAccessToken(value) {
   const token = normalizeTokenText(value);
-  if (!token || /^[{[]/.test(token)) {
+  const invalidTokenValues = new Set([
+    'undefined',
+    'null',
+    'false',
+    'true',
+    '[object Object]',
+  ]);
+  if (!token || /^[{[]/.test(token) || invalidTokenValues.has(token)) {
+    return '';
+  }
+  if (token.length < 20) {
     return '';
   }
   return token;
@@ -96,7 +106,10 @@ function findAmbakAccessToken() {
     return '';
   }
 
-  const entries = readStorageEntries(window.localStorage);
+  const entries = [
+    ...readStorageEntries(window.localStorage),
+    ...readStorageEntries(window.sessionStorage),
+  ];
   for (const [key, value] of entries) {
     if (isAccessTokenKey(key)) {
       const token = normalizeAccessToken(value);

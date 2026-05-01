@@ -414,57 +414,6 @@ const LeadDetailApi = (() => {
     return detail && typeof detail === 'object' ? detail : null;
   }
 
-  function dreFlagText(value) {
-    if (value === 1 || value === '1' || value === true) {
-      return 'Executed';
-    }
-    if (value === 0 || value === '0' || value === false) {
-      return 'Not executed';
-    }
-    return '';
-  }
-
-  function getDreFlagValues(detail) {
-    const leadRecord = getPrimaryLeadDetail(detail);
-    if (!leadRecord) {
-      return [];
-    }
-    return [
-      leadRecord?.lead_details?.lead_dre_executed,
-      leadRecord?.lead_details?.dre_executed,
-      leadRecord?.customer?.customer_dre_executed,
-      leadRecord?.customer?.dre_executed,
-      ...(Array.isArray(leadRecord?.co_applicant)
-        ? leadRecord.co_applicant.flatMap((item) => [
-          item?.coapplicant_dre_executed,
-          item?.dre_executed,
-        ])
-        : []),
-    ];
-  }
-
-  function getEffectiveDreStatus(detail) {
-    const statuses = getDreFlagValues(detail).map(dreFlagText).filter(Boolean);
-    if (statuses.includes('Executed')) {
-      return 'Executed';
-    }
-    if (statuses.includes('Not executed')) {
-      return 'Not executed';
-    }
-    return '';
-  }
-
-  function getEffectiveDreExecuted(detail) {
-    const status = getEffectiveDreStatus(detail);
-    if (status === 'Executed') {
-      return 1;
-    }
-    if (status === 'Not executed') {
-      return 0;
-    }
-    return null;
-  }
-
   function buildLeadDreDocumentQuery() {
     return `mutation getLeadDreDocument($lead_id: Int!, $type: String!, $customer_id: Int, $coapplicant_id: Int) {
   get_lead_dre_document(
@@ -602,39 +551,10 @@ const LeadDetailApi = (() => {
     };
   }
 
-  function buildLeadFacts(detail, maxFields = 2000) {
-    const facts = {};
-
-    function visit(value, path = '') {
-      if (!value || Object.keys(facts).length >= maxFields) {
-        return;
-      }
-      if (Array.isArray(value)) {
-        value.slice(0, 10).forEach((item, index) => visit(item, path ? `${path}[${index}]` : `[${index}]`));
-        return;
-      }
-      if (typeof value === 'object') {
-        Object.entries(value).forEach(([key, nestedValue]) => {
-          visit(nestedValue, path ? `${path}.${key}` : key);
-        });
-        return;
-      }
-      if (value !== null && value !== undefined && value !== '') {
-        facts[path] = String(value);
-      }
-    }
-
-    visit(detail);
-    return facts;
-  }
-
   return {
-    buildLeadFacts,
     extractLeadIdFromUrl,
     fetchLeadDreDocuments,
     fetchLeadDetail,
-    getEffectiveDreExecuted,
-    getEffectiveDreStatus,
     getPrimaryLeadDetail,
     isLoanDetailUrl,
   };

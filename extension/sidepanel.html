@@ -72,9 +72,22 @@
       flex: 1;
       min-height: 0;
       flex-direction: column;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     .view.active {
       display: flex;
+    }
+    .view::-webkit-scrollbar {
+      width: 10px;
+    }
+    .view::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .view::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.22);
+      border-radius: 999px;
+      border: 2px solid rgba(9, 17, 31, 0.85);
     }
     .header {
       display: flex;
@@ -423,7 +436,8 @@
       border-color: rgba(255, 107, 122, 0.16);
     }
     #transcript-container {
-      flex-grow: 1;
+      flex: 1 0 180px;
+      min-height: 180px;
       overflow-y: auto;
       padding: 14px;
       display: flex;

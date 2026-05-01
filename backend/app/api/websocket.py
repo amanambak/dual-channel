@@ -9,6 +9,7 @@ from app.llm.service import LLMService
 from app.services.session_manager import SessionManager
 from app.services.schema_registry import get_schema_registry
 from app.services.schema_normalizer import normalize_extracted_fields
+from app.services.lead_detail_context import build_lead_context
 from app.services.lead_detail_context import normalize_lead_detail_payload
 
 router = APIRouter()
@@ -36,10 +37,35 @@ class ChatRequest(BaseModel):
     leadDetail: Any = None
     lead_facts: Any = None
     leadFacts: Any = None
+    lead_document_status: Any = None
+    leadDocumentStatus: Any = None
     lead_dre_documents: Any = None
     leadDreDocuments: Any = None
     lead_dre_document_error: Any = None
     leadDreDocumentError: Any = None
+    lead_context: Any = None
+    leadContext: Any = None
+
+
+class LeadContextRequest(BaseModel):
+    lead_id: Any = None
+    leadId: Any = None
+    lead_detail: Any = None
+    leadDetail: Any = None
+    lead_dre_documents: Any = None
+    leadDreDocuments: Any = None
+    lead_dre_document_error: Any = None
+    leadDreDocumentError: Any = None
+    lead_document_status: Any = None
+    leadDocumentStatus: Any = None
+    lead_facts: Any = None
+    leadFacts: Any = None
+
+
+def _normalize_optional_error(value: Any) -> str | None:
+    if value not in (None, ""):
+        return str(value)
+    return None
 
 
 def _normalize_chat_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -102,25 +128,51 @@ async def summary_chat(request: SummaryChatRequest) -> dict:
     return {"reply": reply, "customer_info": normalized_customer_info}
 
 
+@router.post("/api/lead/context")
+async def lead_context(request: LeadContextRequest) -> dict:
+    return build_lead_context(
+        lead_id=request.lead_id or request.leadId,
+        lead_detail=request.lead_detail or request.leadDetail,
+        lead_dre_documents=request.lead_dre_documents or request.leadDreDocuments,
+        lead_dre_document_error=_normalize_optional_error(
+            request.lead_dre_document_error or request.leadDreDocumentError
+        ),
+        lead_document_status=request.lead_document_status or request.leadDocumentStatus,
+        lead_facts=request.lead_facts or request.leadFacts,
+    )
+
+
 @router.post("/api/chat")
 async def chat_reply(request: ChatRequest) -> dict:
     lead_id = request.lead_id or request.leadId
+    lead_context_payload = request.lead_context or request.leadContext
+    if not isinstance(lead_context_payload, dict):
+        lead_context_payload = None
     lead_detail = normalize_lead_detail_payload(request.lead_detail or request.leadDetail)
     lead_facts = request.lead_facts or request.leadFacts
     if not isinstance(lead_facts, dict):
         lead_facts = None
+    lead_document_status = request.lead_document_status or request.leadDocumentStatus
     lead_dre_documents = request.lead_dre_documents or request.leadDreDocuments
-    lead_dre_document_error = request.lead_dre_document_error or request.leadDreDocumentError
-    if lead_dre_document_error not in (None, ""):
-        lead_dre_document_error = str(lead_dre_document_error)
-    else:
-        lead_dre_document_error = None
+    lead_dre_document_error = _normalize_optional_error(
+        request.lead_dre_document_error or request.leadDreDocumentError
+    )
+    canonical_lead_context = lead_context_payload or build_lead_context(
+        lead_id=lead_id,
+        lead_detail=lead_detail,
+        lead_dre_documents=lead_dre_documents,
+        lead_dre_document_error=lead_dre_document_error,
+        lead_document_status=lead_document_status,
+        lead_facts=lead_facts,
+    )
 
     logger.info(
-        "Chat request lead context: lead_id=%s has_detail=%s has_facts=%s has_dre_documents=%s history_turns=%d",
+        "Chat request lead context: lead_id=%s has_context=%s has_detail=%s has_facts=%s has_document_status=%s has_dre_documents=%s history_turns=%d",
         lead_id,
+        bool(canonical_lead_context),
         bool(lead_detail),
         bool(lead_facts),
+        bool(lead_document_status),
         bool(lead_dre_documents),
         len(request.history),
     )
@@ -132,10 +184,13 @@ async def chat_reply(request: ChatRequest) -> dict:
         lead_detail=lead_detail,
         lead_facts=lead_facts,
         lead_dre_documents=lead_dre_documents,
+        lead_document_status=lead_document_status,
         lead_dre_document_error=lead_dre_document_error,
+        lead_context=canonical_lead_context,
     )
     return {
         "reply": reply,
-        "lead_id": lead_id,
-        "lead_context_used": bool(lead_detail or lead_facts or lead_dre_documents or lead_dre_document_error),
+        "lead_id": lead_id or canonical_lead_context.get("lead_id"),
+        "lead_context": canonical_lead_context,
+        "lead_context_used": bool(canonical_lead_context or lead_detail or lead_facts or lead_document_status or lead_dre_documents or lead_dre_document_error),
     }

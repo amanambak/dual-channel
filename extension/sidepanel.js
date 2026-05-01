@@ -34,7 +34,7 @@ let chatSending = false;
 let latestSummary = null;
 let latestLeadDetail = null;
 let latestLeadId = null;
-let latestLeadFacts = null;
+let latestLeadContext = null;
 let leadDetailLookupTimer = null;
 let leadDetailRequestId = 0;
 let lastLeadLookupKey = '';
@@ -319,7 +319,7 @@ async function refreshLeadDetailStatus(url) {
     updateLeadDetailStatus('Lead detail check will run on Ambak lead pages.');
     latestLeadDetail = null;
     latestLeadId = null;
-    latestLeadFacts = null;
+    latestLeadContext = null;
     renderLeadDetailData(null);
     return;
   }
@@ -347,7 +347,7 @@ async function refreshLeadDetailStatus(url) {
     updateLeadDetailStatus(`Lead detail API check failed: ${response.error}`, 'error');
     latestLeadDetail = null;
     latestLeadId = null;
-    latestLeadFacts = null;
+    latestLeadContext = null;
     renderLeadDetailData(null);
     return;
   }
@@ -356,18 +356,18 @@ async function refreshLeadDetailStatus(url) {
     updateLeadDetailStatus(response.reason || 'Lead detail check skipped.');
     latestLeadDetail = null;
     latestLeadId = null;
-    latestLeadFacts = null;
+    latestLeadContext = null;
     renderLeadDetailData(null);
     return;
   }
 
   latestLeadDetail = response.detail || null;
   latestLeadId = response.leadId || null;
-  latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
+  latestLeadContext = response.leadContext || null;
   lastLeadLookupKey = lookupKey || buildLeadLookupKey(url);
   leadLookupInFlightKey = '';
   updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
-  renderLeadDetailData(response.detail, response.dreDocuments || null, response.dreDocumentError || '');
+  renderLeadDetailData(response.detail, response.leadContext || null, response.documentStatus || null, response.dreDocumentError || '');
 }
 
 function formatLeadDetailStatus(leadId, detail) {
@@ -392,99 +392,19 @@ function updateLeadDetailStatus(message, state = '') {
   leadDetailStatus.classList.toggle('loading', state === 'loading');
 }
 
-function getDreStatus(detail) {
-  return LeadDetailApi.getEffectiveDreStatus(detail);
+function getDreStatus(leadContext) {
+  return leadContext?.dre_status || '';
 }
 
-function isDocLike(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false;
-  }
-  return ['doc_id', 'ldoc_id', 'parent_doc_id', 'doc_path', 'child_name', 'parent_name', 'is_doc_uploaded', 'doc_upload_url'].some((key) => key in value);
-}
+function buildDocumentBuckets(documentStatus) {
+  const toRows = (values) => (Array.isArray(values) ? values : [])
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map((name) => ({ name: String(name).trim() }));
 
-function parsePossibleJson(value) {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || !/^[{[]/.test(trimmed)) {
-    return null;
-  }
-  try {
-    return JSON.parse(trimmed);
-  } catch (err) {
-    return null;
-  }
-}
-
-function collectDocItems(value, items = []) {
-  if (!value) {
-    return items;
-  }
-  const parsed = parsePossibleJson(value);
-  if (parsed) {
-    return collectDocItems(parsed, items);
-  }
-  if (Array.isArray(value)) {
-    value.forEach((item) => collectDocItems(item, items));
-    return items;
-  }
-  if (typeof value !== 'object') {
-    return items;
-  }
-  if (isDocLike(value)) {
-    items.push(value);
-  }
-  Object.values(value).forEach((nestedValue) => collectDocItems(nestedValue, items));
-  return items;
-}
-
-function getDocName(doc) {
-  return doc.child_name
-    || doc.parent_name
-    || doc.document_name
-    || doc.doc_name
-    || doc.label
-    || (doc.doc_id ? `Document ${doc.doc_id}` : 'Document');
-}
-
-function isDocumentUploaded(doc) {
-  if ('is_doc_uploaded' in doc) {
-    return doc.is_doc_uploaded === 1 || doc.is_doc_uploaded === '1' || doc.is_doc_uploaded === true;
-  }
-  if (doc.doc_upload_url || doc.doc_path) {
-    return true;
-  }
-  const status = String(doc.status || '').toLowerCase();
-  return ['uploaded', 'approved', 'verified', 'complete', 'completed'].some((term) => status.includes(term));
-}
-
-function buildDocumentBuckets(detail, dreDocuments) {
-  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
-  const docs = [
-    ...collectDocItems(dreDocuments),
-    ...collectDocItems(leadRecord?.customer?.recommended_docs),
-  ];
-  const seen = new Set();
-  const buckets = { uploaded: [], pending: [] };
-
-  docs.forEach((doc) => {
-    const name = getDocName(doc);
-    const key = [doc.id, doc.ldoc_id, doc.doc_id, doc.parent_doc_id, doc.customer_id, name].filter(Boolean).join(':');
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    buckets[isDocumentUploaded(doc) ? 'uploaded' : 'pending'].push({
-      name,
-      parentName: doc.parent_name || '',
-      status: doc.status || '',
-      path: doc.doc_path || doc.doc_upload_url || '',
-    });
-  });
-
-  return buckets;
+  return {
+    uploaded: toRows(documentStatus?.uploaded_documents),
+    pending: toRows(documentStatus?.missing_documents),
+  };
 }
 
 function appendDocumentList(parent, title, docs, state) {
@@ -518,7 +438,7 @@ function appendDocumentList(parent, title, docs, state) {
   parent.appendChild(section);
 }
 
-function renderLeadDetailData(detail, dreDocuments = null, dreDocumentError = '') {
+function renderLeadDetailData(detail, leadContext = null, documentStatus = null, dreDocumentError = '') {
   if (!leadDetailData) {
     return;
   }
@@ -531,9 +451,11 @@ function renderLeadDetailData(detail, dreDocuments = null, dreDocumentError = ''
   const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
   const leadDetails = leadRecord?.lead_details || {};
   const bankName = leadDetails.bank?.banklang?.bank_name || '';
-  const dreStatus = getDreStatus(detail);
+  const backendDocumentStatus = leadContext?.document_status || documentStatus;
+  const backendDocumentError = leadContext?.document_error || dreDocumentError;
+  const dreStatus = getDreStatus(leadContext);
   const summary = {
-    Lead: leadRecord?.id || leadDetails.lead_id || '',
+    Lead: leadContext?.lead_id || leadRecord?.id || leadDetails.lead_id || '',
     Status: leadRecord?.status_info?.statuslang?.status_name || '',
     Substatus: leadRecord?.sub_status_info?.substatuslang?.sub_status_name || '',
     Bank: bankName,
@@ -572,12 +494,12 @@ function renderLeadDetailData(detail, dreDocuments = null, dreDocumentError = ''
   const rawJson = document.createElement('pre');
   rawJson.textContent = JSON.stringify({
     dre_status: dreStatus || null,
-    effective_dre_executed: LeadDetailApi.getEffectiveDreExecuted(detail),
+    lead_context: leadContext,
     lead_detail: detail,
-    dre_documents: dreDocuments,
+    lead_document_status: backendDocumentStatus,
   }, null, 2);
 
-  const docBuckets = buildDocumentBuckets(detail, dreDocuments);
+  const docBuckets = buildDocumentBuckets(backendDocumentStatus);
   const documentsEl = document.createElement('div');
   documentsEl.className = 'lead-document-section';
 
@@ -586,10 +508,10 @@ function renderLeadDetailData(detail, dreDocuments = null, dreDocumentError = ''
   documentsTitle.textContent = 'DRE Documents';
   documentsEl.appendChild(documentsTitle);
 
-  if (dreDocumentError) {
+  if (backendDocumentError) {
     const error = document.createElement('div');
     error.className = 'lead-document-error';
-    error.textContent = dreDocumentError;
+    error.textContent = backendDocumentError;
     documentsEl.appendChild(error);
   }
 
@@ -726,13 +648,13 @@ async function sendChatMessage() {
       .get([
         'currentLeadDetail',
         'currentLeadId',
-        'currentLeadFacts',
+        'currentLeadContext',
         'currentLeadDreDocuments',
         'currentLeadDreDocumentError',
       ])
       .catch(() => ({}));
     const leadDetailForChat = latestLeadDetail || storedLead.currentLeadDetail || null;
-    const leadFactsForChat = latestLeadFacts || storedLead.currentLeadFacts || LeadDetailApi.buildLeadFacts(leadDetailForChat);
+    const leadContextForChat = latestLeadContext || storedLead.currentLeadContext || null;
 
     const response = await new Promise((resolve) => {
       chrome.runtime.sendMessage(
@@ -742,7 +664,7 @@ async function sendChatMessage() {
           history,
           lead_id: latestLeadId || storedLead.currentLeadId || null,
           lead_detail: leadDetailForChat,
-          lead_facts: leadFactsForChat,
+          lead_context: leadContextForChat,
           lead_dre_documents: storedLead.currentLeadDreDocuments || null,
           lead_dre_document_error: storedLead.currentLeadDreDocumentError || null,
         },

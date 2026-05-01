@@ -76,7 +76,8 @@ chrome.runtime.onInstalled.addListener(() => {
     isAgentMicPaused: false,
     messages: [],
     currentSessionId: null,
-    captureMode: 'gmeet'
+    captureMode: 'gmeet',
+    currentLeadContext: null
   });
   isCapturing = false;
   isAgentMicPaused = false;
@@ -232,7 +233,7 @@ async function fetchCustomerDreDocuments({ detail, leadId, token }) {
   const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail);
   const customerId = leadRecord?.customer?.customer_id;
   if (!customerId) {
-    return { documents: null, error: 'Customer ID was not found in lead details.' };
+    return { dreDocuments: null, error: 'Customer ID was not found in lead details.' };
   }
 
   try {
@@ -242,9 +243,9 @@ async function fetchCustomerDreDocuments({ detail, leadId, token }) {
       type: 'customer',
       customerId,
     });
-    return { documents: result.documents || null, error: null };
+    return { dreDocuments: result.documents || null, error: null };
   } catch (err) {
-    return { documents: null, error: err.message };
+    return { dreDocuments: null, error: err.message };
   }
 }
 
@@ -252,14 +253,55 @@ function getPageAccessToken(pageContext) {
   return pageContext?.accessToken || '';
 }
 
+async function buildBackendLeadContext({
+  leadId,
+  detail,
+  dreDocuments = null,
+  dreDocumentError = null,
+  leadDocumentStatus = null,
+  leadFacts = null,
+}) {
+  const response = await fetch(`${CONFIG.BACKEND_HTTP_URL}/api/lead/context`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lead_id: leadId || null,
+      lead_detail: detail || null,
+      lead_dre_documents: dreDocuments || null,
+      lead_dre_document_error: dreDocumentError || null,
+      lead_document_status: leadDocumentStatus || null,
+      lead_facts: leadFacts || null,
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Lead context API failed with HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function persistLeadContext({ detail, leadId, dreDocuments, dreDocumentError, leadContext }) {
+  await chrome.storage.local.set({
+    currentLeadDetail: detail || null,
+    currentLeadId: leadId || leadContext?.lead_id || null,
+    currentLeadContext: leadContext || null,
+    currentLeadFacts: leadContext?.facts || null,
+    currentLeadDocumentStatus: leadContext?.document_status || null,
+    currentLeadDreDocuments: dreDocuments || null,
+    currentLeadDreDocumentError: leadContext?.document_error || dreDocumentError || null,
+  });
+}
+
 async function loadLeadDetailForChat(message, stored) {
-  if (message.lead_detail || message.leadDetail || stored.currentLeadDetail || message.lead_facts || message.leadFacts || stored.currentLeadFacts) {
+  if (message.lead_context || message.leadContext || message.lead_detail || message.leadDetail || stored.currentLeadDetail || message.lead_facts || message.leadFacts || stored.currentLeadFacts || message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || stored.currentLeadContext) {
     const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || null;
     const leadId = message.lead_id || message.leadId || stored.currentLeadId || null;
+    let leadContext = message.lead_context || message.leadContext || stored.currentLeadContext || null;
     let dreDocuments = message.lead_dre_documents || message.leadDreDocuments || stored.currentLeadDreDocuments || null;
+    const legacyDocumentStatus = message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || null;
+    const legacyFacts = message.lead_facts || message.leadFacts || stored.currentLeadFacts || null;
     let dreDocumentError = message.lead_dre_document_error || message.leadDreDocumentError || stored.currentLeadDreDocumentError || null;
 
-    if (!dreDocuments && !dreDocumentError && detail) {
+    if (!leadContext && !dreDocuments && !dreDocumentError && detail) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const url = message.url || tab?.url || tab?.pendingUrl || '';
       if (tab?.id && LeadDetailApi.isLoanDetailUrl(url)) {
@@ -271,21 +313,30 @@ async function loadLeadDetailForChat(message, stored) {
           leadId: leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId,
           token: accessToken,
         });
-        dreDocuments = dreResult.documents;
+        dreDocuments = dreResult.dreDocuments;
         dreDocumentError = dreResult.error;
-        await chrome.storage.local.set({
-          currentLeadDreDocuments: dreDocuments,
-          currentLeadDreDocumentError: dreDocumentError,
-        });
       }
     }
 
+    if (!leadContext) {
+      leadContext = await buildBackendLeadContext({
+        leadId,
+        detail,
+        dreDocuments,
+        dreDocumentError,
+        leadDocumentStatus: legacyDocumentStatus,
+        leadFacts: legacyFacts,
+      });
+    }
+
+    await persistLeadContext({ detail, leadId, dreDocuments, dreDocumentError, leadContext });
+
     return {
-      leadId,
+      leadId: leadContext?.lead_id || leadId,
       detail,
-      facts: message.lead_facts || message.leadFacts || stored.currentLeadFacts || LeadDetailApi.buildLeadFacts(detail),
       dreDocuments,
-      dreDocumentError,
+      dreDocumentError: leadContext?.document_error || dreDocumentError,
+      leadContext,
     };
   }
 
@@ -295,8 +346,8 @@ async function loadLeadDetailForChat(message, stored) {
     return {
       leadId: stored.currentLeadId || null,
       detail: stored.currentLeadDetail || null,
-      facts: stored.currentLeadFacts || null,
       dreDocuments: stored.currentLeadDreDocuments || null,
+      leadContext: stored.currentLeadContext || null,
       dreDocumentError: stored.currentLeadDreDocumentError || null,
     };
   }
@@ -307,20 +358,25 @@ async function loadLeadDetailForChat(message, stored) {
   const leadId = message.lead_id || message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
   const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: accessToken });
   const dreResult = await fetchCustomerDreDocuments({ detail: result.detail, leadId: result.leadId, token: accessToken });
-  const facts = LeadDetailApi.buildLeadFacts(result.detail);
-  await chrome.storage.local.set({
-    currentLeadDetail: result.detail,
-    currentLeadId: result.leadId,
-    currentLeadFacts: facts,
-    currentLeadDreDocuments: dreResult.documents,
-    currentLeadDreDocumentError: dreResult.error,
-  });
-  return {
+  const leadContext = await buildBackendLeadContext({
     leadId: result.leadId,
     detail: result.detail,
-    facts,
-    dreDocuments: dreResult.documents,
+    dreDocuments: dreResult.dreDocuments,
     dreDocumentError: dreResult.error,
+  });
+  await persistLeadContext({
+    detail: result.detail,
+    leadId: result.leadId,
+    dreDocuments: dreResult.dreDocuments,
+    dreDocumentError: dreResult.error,
+    leadContext,
+  });
+  return {
+    leadId: leadContext?.lead_id || result.leadId,
+    detail: result.detail,
+    dreDocuments: dreResult.dreDocuments,
+    dreDocumentError: leadContext?.document_error || dreResult.error,
+    leadContext,
   };
 }
 
@@ -328,7 +384,9 @@ function handleChatSend(message, sender, sendResponse) {
   chrome.storage.local.get([
     'currentLeadDetail',
     'currentLeadId',
+    'currentLeadContext',
     'currentLeadFacts',
+    'currentLeadDocumentStatus',
     'currentLeadDreDocuments',
     'currentLeadDreDocumentError',
   ])
@@ -339,9 +397,9 @@ function handleChatSend(message, sender, sendResponse) {
         history: Array.isArray(message.history) ? message.history : [],
         lead_id: lead.leadId || null,
         lead_detail: lead.detail || null,
-        lead_facts: lead.facts || null,
         lead_dre_documents: lead.dreDocuments || null,
         lead_dre_document_error: lead.dreDocumentError || null,
+        lead_context: lead.leadContext || null,
       };
 
       return fetch(`${CONFIG.BACKEND_HTTP_URL}/api/chat`, {
@@ -387,19 +445,26 @@ function handleGetLeadDetail(message, sender, sendResponse) {
       const leadId = message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
       const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: accessToken });
       const dreResult = await fetchCustomerDreDocuments({ detail: result.detail, leadId: result.leadId, token: accessToken });
-      await chrome.storage.local.set({
-        currentLeadDetail: result.detail,
-        currentLeadId: result.leadId,
-        currentLeadFacts: LeadDetailApi.buildLeadFacts(result.detail),
-        currentLeadDreDocuments: dreResult.documents,
-        currentLeadDreDocumentError: dreResult.error,
+      const leadContext = await buildBackendLeadContext({
+        leadId: result.leadId,
+        detail: result.detail,
+        dreDocuments: dreResult.dreDocuments,
+        dreDocumentError: dreResult.error,
+      });
+      await persistLeadContext({
+        detail: result.detail,
+        leadId: result.leadId,
+        dreDocuments: dreResult.dreDocuments,
+        dreDocumentError: dreResult.error,
+        leadContext,
       });
       sendResponse({
         success: true,
-        leadId: result.leadId,
+        leadId: leadContext?.lead_id || result.leadId,
         detail: result.detail,
-        dreDocuments: dreResult.documents,
-        dreDocumentError: dreResult.error,
+        leadContext,
+        documentStatus: leadContext?.document_status || null,
+        dreDocumentError: leadContext?.document_error || dreResult.error,
       });
     } catch (err) {
       sendResponse({ error: err.message });
