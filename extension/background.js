@@ -9,6 +9,16 @@ let targetTabId = null;
 let currentSessionId = null;
 let captureMode = 'gmeet';
 
+function pushLeadContextToOffscreen({ leadId, facts, missingFields }) {
+  chrome.runtime.sendMessage({
+    type: 'SET_SESSION_LEAD_CONTEXT',
+    offscreen: true,
+    leadId: leadId || null,
+    leadFacts: facts || null,
+    leadMissingFields: missingFields || null,
+  }).catch(() => {});
+}
+
 async function setCurrentSessionId(sessionId) {
   currentSessionId = sessionId || null;
   await chrome.storage.local.set({ currentSessionId });
@@ -31,7 +41,7 @@ async function saveMessage(message) {
     timestamp: Date.now()
   });
   if (messages.length > 1000) {
-    messages.shift();
+    messages.splice(0, messages.length - 1000);
   }
   await chrome.storage.local.set({ messages });
 }
@@ -47,7 +57,6 @@ async function clearMessages() {
 
 chrome.action.onClicked.addListener(async (tab) => {
   await chrome.sidePanel.open({ tabId: tab.id });
-  startCapture();
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
@@ -228,33 +237,130 @@ function handleSummaryChat(message, sender, sendResponse) {
   return true;
 }
 
+function hasObjectFields(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
+}
+
+function isAmbakTabUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl || '');
+    return url.hostname === 'ambak.com' || url.hostname.endsWith('.ambak.com');
+  } catch (err) {
+    return false;
+  }
+}
+
+function maskAuthTokenForLog(token) {
+  const text = String(token || '').trim();
+  if (!text) {
+    return null;
+  }
+  if (text.length <= 14) {
+    return `${text.slice(0, 3)}...${text.slice(-2)}`;
+  }
+  return `${text.slice(0, 8)}...${text.slice(-6)}`;
+}
+
+async function getAmbakAuthContext() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const candidateTabs = [];
+  if (activeTab?.id && isAmbakTabUrl(activeTab.url || activeTab.pendingUrl)) {
+    candidateTabs.push(activeTab);
+  }
+
+  const ambakTabs = await chrome.tabs.query({ url: ['https://*.ambak.com/*', 'http://*.ambak.com/*'] }).catch(() => []);
+  for (const tab of ambakTabs) {
+    if (tab?.id && !candidateTabs.some((candidate) => candidate.id === tab.id)) {
+      candidateTabs.push(tab);
+    }
+  }
+
+  for (const tab of candidateTabs) {
+    try {
+      await ensureContentScriptInjected(tab.id);
+      const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
+      if (pageContext?.token) {
+        return { tab, pageContext };
+      }
+    } catch (err) {
+    }
+  }
+
+  throw new Error('Open any Ambak page where you are logged in so the auth token can be read.');
+}
+
+async function fetchAndStoreLeadDetail(leadId) {
+  const normalizedLeadId = LeadDetailApi.normalizeLeadId ? LeadDetailApi.normalizeLeadId(leadId) : String(leadId || '').trim();
+  if (!/^\d+$/.test(normalizedLeadId)) {
+    throw new Error('Valid numeric lead id is required.');
+  }
+
+  const { pageContext } = await getAmbakAuthContext();
+  console.log('[LeadDebug][background] fetching lead detail', {
+    leadId: normalizedLeadId,
+    'auth token found': Boolean(pageContext?.token),
+    'auth token preview': maskAuthTokenForLog(pageContext?.token),
+  });
+  const result = await LeadDetailApi.fetchLeadDetail({ leadId: normalizedLeadId, token: pageContext?.token });
+  const facts = LeadDetailApi.buildLeadFacts(result.detail);
+  const missingFields = LeadDetailApi.buildLeadMissingFields(result.detail);
+  console.group('[LeadDebug][background] fetched lead detail');
+  console.log('leadId', result.leadId);
+  console.log('detail keys', result.detail ? Object.keys(result.detail).slice(0, 30) : []);
+  console.log('facts count', Object.keys(facts).length);
+  console.log('facts sample', Object.fromEntries(Object.entries(facts).slice(0, 30)));
+  console.log('missing count', missingFields.length);
+  console.log('missing sample', missingFields.slice(0, 30));
+  console.groupEnd();
+  await chrome.storage.local.set({
+    currentLeadDetail: result.detail,
+    currentLeadId: result.leadId,
+    currentLeadFacts: facts,
+    currentLeadMissingFields: missingFields,
+  });
+  pushLeadContextToOffscreen({ leadId: result.leadId, facts, missingFields });
+  return { leadId: result.leadId, detail: result.detail, facts, missingFields };
+}
+
 async function loadLeadDetailForChat(message, stored) {
-  if (message.lead_detail || message.leadDetail || stored.currentLeadDetail || message.lead_facts || message.leadFacts || stored.currentLeadFacts) {
+  const requestedLeadId = message.lead_id || message.leadId || stored.currentLeadId || null;
+  const storedLeadId = stored.currentLeadId || null;
+  const hasRequestedDifferentLead = requestedLeadId && storedLeadId && String(requestedLeadId) !== String(storedLeadId);
+
+  if (!hasRequestedDifferentLead && (message.lead_detail || message.leadDetail || stored.currentLeadDetail)) {
     const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || null;
     return {
-      leadId: message.lead_id || message.leadId || stored.currentLeadId || null,
+      leadId: requestedLeadId,
       detail,
-      facts: message.lead_facts || message.leadFacts || stored.currentLeadFacts || LeadDetailApi.buildLeadFacts(detail),
+      facts: LeadDetailApi.buildLeadFacts(detail),
+      missingFields: LeadDetailApi.buildLeadMissingFields(detail),
     };
   }
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const url = message.url || tab?.url || tab?.pendingUrl || '';
-  if (!tab?.id || !LeadDetailApi.isLoanDetailUrl(url)) {
-    return { leadId: stored.currentLeadId || null, detail: stored.currentLeadDetail || null, facts: stored.currentLeadFacts || null };
+  const candidateFacts = message.lead_facts || message.leadFacts || stored.currentLeadFacts || null;
+  if (!hasRequestedDifferentLead && hasObjectFields(candidateFacts)) {
+    return {
+      leadId: requestedLeadId,
+      detail: null,
+      facts: candidateFacts,
+      missingFields: message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
+    };
   }
 
-  await ensureContentScriptInjected(tab.id);
-  const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
-  const leadId = message.lead_id || message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
-  const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
-  const facts = LeadDetailApi.buildLeadFacts(result.detail);
-  await chrome.storage.local.set({ currentLeadDetail: result.detail, currentLeadId: result.leadId, currentLeadFacts: facts });
-  return { leadId: result.leadId, detail: result.detail, facts };
+  if (requestedLeadId) {
+    return fetchAndStoreLeadDetail(requestedLeadId);
+  }
+
+  return {
+    leadId: stored.currentLeadId || null,
+    detail: stored.currentLeadDetail || null,
+    facts: stored.currentLeadFacts || null,
+    missingFields: stored.currentLeadMissingFields || null,
+  };
 }
 
 function handleChatSend(message, sender, sendResponse) {
-  chrome.storage.local.get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts'])
+  chrome.storage.local.get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts', 'currentLeadMissingFields'])
     .then(async (stored) => {
       const lead = await loadLeadDetailForChat(message, stored);
       const payload = {
@@ -263,7 +369,19 @@ function handleChatSend(message, sender, sendResponse) {
         lead_id: lead.leadId || null,
         lead_detail: lead.detail || null,
         lead_facts: lead.facts || null,
+        lead_missing_fields: lead.missingFields || null,
+        lead_refreshed: Boolean(message.lead_refreshed || message.leadRefreshed),
       };
+
+      console.group('[LeadDebug][background] /api/chat payload');
+      console.log('lead_id', payload.lead_id);
+      console.log('has detail', Boolean(payload.lead_detail));
+      console.log('detail keys', payload.lead_detail ? Object.keys(payload.lead_detail).slice(0, 30) : []);
+      console.log('facts count', payload.lead_facts ? Object.keys(payload.lead_facts).length : 0);
+      console.log('facts sample', payload.lead_facts ? Object.fromEntries(Object.entries(payload.lead_facts).slice(0, 30)) : {});
+      console.log('missing count', Array.isArray(payload.lead_missing_fields) ? payload.lead_missing_fields.length : 0);
+      console.log('missing sample', Array.isArray(payload.lead_missing_fields) ? payload.lead_missing_fields.slice(0, 30) : []);
+      console.groupEnd();
 
       return fetch(`${CONFIG.BACKEND_HTTP_URL}/api/chat`, {
         method: 'POST',
@@ -280,6 +398,9 @@ function handleChatSend(message, sender, sendResponse) {
         reply: data.reply || '',
         lead_id: data.lead_id || null,
         lead_context_used: Boolean(data.lead_context_used),
+        needs_lead_refresh_confirmation: Boolean(data.needs_lead_refresh_confirmation),
+        previous_next_step: data.previous_next_step || null,
+        used_cached_next_step: Boolean(data.used_cached_next_step),
       });
     })
     .catch((err) => {
@@ -289,35 +410,13 @@ function handleChatSend(message, sender, sendResponse) {
 }
 
 function handleGetLeadDetail(message, sender, sendResponse) {
-  chrome.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
-    const url = message.url || tab?.url || tab?.pendingUrl || '';
-    if (!LeadDetailApi.isLoanDetailUrl(url)) {
-      sendResponse({ skipped: true, reason: 'Current tab is not an Ambak loan detail page.' });
-      return;
-    }
-
-    if (!tab?.id) {
-      sendResponse({ error: 'Active tab is unavailable.' });
-      return;
-    }
-
-    try {
-      await ensureContentScriptInjected(tab.id);
-      const pageContext = await chrome.tabs.sendMessage(tab.id, { type: 'GET_AMBAK_PAGE_CONTEXT' });
-      const leadId = message.leadId || LeadDetailApi.extractLeadIdFromUrl(url) || pageContext?.leadId;
-      const result = await LeadDetailApi.fetchLeadDetail({ leadId, token: pageContext?.token });
-      await chrome.storage.local.set({
-        currentLeadDetail: result.detail,
-        currentLeadId: result.leadId,
-        currentLeadFacts: LeadDetailApi.buildLeadFacts(result.detail),
-      });
-      sendResponse({ success: true, leadId: result.leadId, detail: result.detail });
-    } catch (err) {
+  fetchAndStoreLeadDetail(message.leadId || message.lead_id)
+    .then((result) => {
+      sendResponse({ success: true, leadId: result.leadId, detail: result.detail, missingFields: result.missingFields });
+    })
+    .catch((err) => {
       sendResponse({ error: err.message });
-    }
-  }).catch((err) => {
-    sendResponse({ error: err.message });
-  });
+    });
   return true;
 }
 
@@ -326,6 +425,13 @@ function handleSessionReady(message) {
     chrome.runtime.sendMessage({
       type: 'SESSION_STATUS_CHANGED',
       sessionId: currentSessionId
+    }).catch(() => {});
+    chrome.storage.local.get(['currentLeadId', 'currentLeadFacts', 'currentLeadMissingFields']).then((stored) => {
+      pushLeadContextToOffscreen({
+        leadId: stored.currentLeadId || null,
+        facts: stored.currentLeadFacts || null,
+        missingFields: stored.currentLeadMissingFields || null,
+      });
     }).catch(() => {});
   });
   return false;
@@ -461,7 +567,7 @@ async function startCapture() {
         captureMode,
         offscreen: true
       }).catch(() => {});
-    }, 250);
+    }, CONFIG.OFFSCREEN_INIT_DELAY_MS);
 
     isCapturing = true;
     isAgentMicPaused = false;

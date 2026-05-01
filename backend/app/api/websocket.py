@@ -35,6 +35,10 @@ class ChatRequest(BaseModel):
     leadDetail: Any = None
     lead_facts: Any = None
     leadFacts: Any = None
+    lead_missing_fields: Any = None
+    leadMissingFields: Any = None
+    lead_refreshed: Any = False
+    leadRefreshed: Any = False
 
 
 def _normalize_chat_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -102,24 +106,42 @@ async def chat_reply(request: ChatRequest) -> dict:
     lead_id = request.lead_id or request.leadId
     lead_detail = request.lead_detail or request.leadDetail
     lead_facts = request.lead_facts or request.leadFacts
+    lead_missing_fields = request.lead_missing_fields or request.leadMissingFields
     if not isinstance(lead_detail, dict):
         lead_detail = None
     if not isinstance(lead_facts, dict):
         lead_facts = None
+    if not isinstance(lead_missing_fields, list):
+        lead_missing_fields = None
 
+    lead_detail_keys = list(lead_detail.keys())[:30] if isinstance(lead_detail, dict) else []
+    lead_fact_keys = list(lead_facts.keys())[:30] if isinstance(lead_facts, dict) else []
+    lead_missing_sample = lead_missing_fields[:10] if isinstance(lead_missing_fields, list) else []
     logger.info(
-        "Chat request lead context: lead_id=%s has_detail=%s has_facts=%s history_turns=%d",
+        "[LeadDebug][backend] chat request: lead_id=%s has_detail=%s detail_keys=%s facts_count=%d fact_keys=%s missing_fields=%d missing_sample=%s history_turns=%d",
         lead_id,
         bool(lead_detail),
-        bool(lead_facts),
+        lead_detail_keys,
+        len(lead_facts or {}),
+        lead_fact_keys,
+        len(lead_missing_fields or []),
+        lead_missing_sample,
         len(request.history),
     )
 
-    reply = await llm_service.generate_chat_reply(
+    lead_refreshed = bool(request.lead_refreshed or request.leadRefreshed)
+
+    result = await llm_service.generate_chat_reply_payload(
         message=str(request.message or ""),
         history=_normalize_chat_history(request.history),
         lead_id=lead_id,
         lead_detail=lead_detail,
         lead_facts=lead_facts,
+        lead_missing_fields=lead_missing_fields,
+        lead_refreshed=lead_refreshed,
     )
-    return {"reply": reply, "lead_id": lead_id, "lead_context_used": bool(lead_detail or lead_facts)}
+    return {
+        **result,
+        "lead_id": lead_id,
+        "lead_context_used": bool(lead_detail or lead_facts),
+    }

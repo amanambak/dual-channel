@@ -2,18 +2,6 @@
 
 const LeadDetailApi = (() => {
   const API_URL = 'https://api-stage.ambak.com/finex/api/v1';
-  const LOAN_DETAIL_HOST = 'loan-stage.ambak.com';
-  const LOAN_DETAIL_PATH = '/lead-detail/customer-details/loan-details/';
-  const LEAD_ID_KEYS = ['lead_id', 'leadId', 'leadID'];
-
-  function isLoanDetailUrl(rawUrl) {
-    try {
-      const url = new URL(rawUrl);
-      return url.hostname === LOAN_DETAIL_HOST && url.pathname.includes(LOAN_DETAIL_PATH);
-    } catch (err) {
-      return false;
-    }
-  }
 
   function normalizeLeadId(value) {
     if (value === null || value === undefined) {
@@ -23,30 +11,11 @@ const LeadDetailApi = (() => {
     return match ? Number(match[0]) : null;
   }
 
-  function extractLeadIdFromUrl(rawUrl) {
-    try {
-      const url = new URL(rawUrl);
-      for (const key of LEAD_ID_KEYS) {
-        const searchLeadId = normalizeLeadId(url.searchParams.get(key));
-        if (searchLeadId) {
-          return searchLeadId;
-        }
-      }
-
-      const hashQuery = url.hash.includes('?') ? url.hash.slice(url.hash.indexOf('?') + 1) : url.hash.replace(/^#/, '');
-      const hashParams = new URLSearchParams(hashQuery);
-      for (const key of LEAD_ID_KEYS) {
-        const hashLeadId = normalizeLeadId(hashParams.get(key));
-        if (hashLeadId) {
-          return hashLeadId;
-        }
-      }
-
-      const numericPathSegment = url.pathname.split('/').map(normalizeLeadId).find(Boolean);
-      return numericPathSegment || null;
-    } catch (err) {
-      return null;
+  function normalizeBearerToken(token) {
+    if (!token) {
+      return '';
     }
+    return String(token).replace(/^Bearer\s+/i, '').trim();
   }
 
   function buildLeadDetailQuery(leadId) {
@@ -717,13 +686,6 @@ const LeadDetailApi = (() => {
 `;
   }
 
-  function normalizeBearerToken(token) {
-    if (!token) {
-      return '';
-    }
-    return String(token).replace(/^Bearer\s+/i, '').trim();
-  }
-
   async function fetchLeadDetail({ leadId, token }) {
     const normalizedLeadId = normalizeLeadId(leadId);
     const bearerToken = normalizeBearerToken(token);
@@ -754,7 +716,8 @@ const LeadDetailApi = (() => {
       throw new Error(payload.errors.map((error) => error.message).filter(Boolean).join('; ') || 'Lead detail API returned errors.');
     }
 
-    const leadDetail = payload?.data?.get_lead_detail || null;
+    const rawLeadDetail = payload?.data?.get_lead_detail || null;
+    const leadDetail = Array.isArray(rawLeadDetail) ? rawLeadDetail[0] : rawLeadDetail;
     if (!leadDetail) {
       throw new Error(`No lead detail found for lead_id ${normalizedLeadId}.`);
     }
@@ -762,36 +725,103 @@ const LeadDetailApi = (() => {
     return { leadId: normalizedLeadId, detail: leadDetail };
   }
 
+  function formatMissingFieldLabel(path) {
+    const leaf = String(path || '').split('.').pop().replace(/\[\d+\]/g, '');
+    return leaf.replace(/_/g, ' ').replace(/\s+/g, ' ').trim().replace(/(^|\s)\S/g, (char) => char.toUpperCase());
+  }
+
   function buildLeadFacts(detail, maxFields = 2000) {
     const facts = {};
 
     function visit(value, path = '') {
-      if (!value || Object.keys(facts).length >= maxFields) {
+      if (value === undefined || Object.keys(facts).length >= maxFields) {
+        return;
+      }
+      if (!path && value === null) {
         return;
       }
       if (Array.isArray(value)) {
+        if (value.length === 0) {
+          if (path) {
+            facts[path] = [];
+          }
+          return;
+        }
         value.slice(0, 10).forEach((item, index) => visit(item, path ? `${path}[${index}]` : `[${index}]`));
         return;
       }
-      if (typeof value === 'object') {
-        Object.entries(value).forEach(([key, nestedValue]) => {
+      if (value !== null && typeof value === 'object') {
+        const entries = Object.entries(value);
+        if (entries.length === 0) {
+          if (path) {
+            facts[path] = {};
+          }
+          return;
+        }
+        entries.forEach(([key, nestedValue]) => {
           visit(nestedValue, path ? `${path}.${key}` : key);
         });
         return;
       }
-      if (value !== null && value !== undefined && value !== '') {
-        facts[path] = String(value);
-      }
+      facts[path] = value === null ? null : String(value);
     }
 
     visit(detail);
     return facts;
   }
 
+  function buildLeadMissingFields(detail, maxFields = 500) {
+    const missing = [];
+
+    function addMissing(path, reason) {
+      if (!path || path.endsWith('__typename') || missing.length >= maxFields) {
+        return;
+      }
+      missing.push({ path, label: formatMissingFieldLabel(path), reason });
+    }
+
+    function visit(value, path = '') {
+      if (missing.length >= maxFields || path.endsWith('__typename')) {
+        return;
+      }
+      if (value === null || value === undefined) {
+        addMissing(path, value === null ? 'null' : 'undefined');
+        return;
+      }
+      if (typeof value === 'string' && value.trim() === '') {
+        addMissing(path, 'empty_string');
+        return;
+      }
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          addMissing(path, 'empty_array');
+          return;
+        }
+        value.slice(0, 25).forEach((item, index) => visit(item, path ? `${path}[${index}]` : `[${index}]`));
+        return;
+      }
+      if (typeof value === 'object') {
+        const entries = Object.entries(value);
+        if (entries.length === 0) {
+          addMissing(path, 'empty_object');
+          return;
+        }
+        entries.forEach(([key, nestedValue]) => {
+          visit(nestedValue, path ? `${path}.${key}` : key);
+        });
+      }
+    }
+
+    visit(detail);
+    return missing;
+  }
+
   return {
     buildLeadFacts,
-    extractLeadIdFromUrl,
+    buildLeadMissingFields,
     fetchLeadDetail,
-    isLoanDetailUrl,
+    normalizeLeadId,
   };
 })();
+
+self.LeadDetailApi = LeadDetailApi;

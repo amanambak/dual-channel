@@ -60,6 +60,7 @@ def build_turn_nodes(llm: LLMService):
             context_summary=state.get("context_summary", ""),
             known_entities=state.get("known_fields", {}),
             last_suggestion=state.get("last_suggestion", ""),
+            priority_missing_fields=state.get("lead_priority_missing_fields", []),
         ):
             full_text += chunk
             if not started_streaming:

@@ -7,6 +7,7 @@ from fastapi import WebSocketDisconnect
 from app.models.events import ErrorEvent
 from app.models.events import TranscriptEvent
 from app.services.deepgram_client import DeepgramClient
+from app.services.lead_detail_context import build_priority_missing_fields
 from app.services.session_text import (
     normalize_confidence,
     should_capture_final_segment,
@@ -46,6 +47,28 @@ async def run(session) -> None:
                     keepalive_task.cancel()
 
 
+def update_lead_context(session, data: dict) -> None:
+    lead_id = data.get("lead_id") or data.get("leadId")
+    lead_facts = data.get("lead_facts") or data.get("leadFacts") or {}
+    lead_detail = data.get("lead_detail") or data.get("leadDetail") or lead_facts
+    lead_missing_fields = data.get("lead_missing_fields") or data.get("leadMissingFields") or []
+
+    if lead_id is not None:
+        session.state.lead_id = str(lead_id)
+    session.state.lead_missing_fields = lead_missing_fields if isinstance(lead_missing_fields, list) else []
+    session.state.lead_priority_missing_fields = build_priority_missing_fields(
+        lead_detail if isinstance(lead_detail, dict) else {},
+        session.state.lead_missing_fields,
+    )
+    logger.info(
+        "Session lead context updated: session_id=%s lead_id=%s missing=%d priority_missing=%d",
+        session.session_id,
+        session.state.lead_id,
+        len(session.state.lead_missing_fields),
+        len(session.state.lead_priority_missing_fields),
+    )
+
+
 async def handle_text_message(session, raw_message: str) -> None:
     try:
         data = json.loads(raw_message)
@@ -64,6 +87,15 @@ async def handle_text_message(session, raw_message: str) -> None:
         session.model_override = (
             config.get("modelOverride") or config.get("aiModel") or config.get("geminiModel")
         )
+        if config.get("leadFacts") or config.get("leadMissingFields") or config.get("leadId"):
+            update_lead_context(
+                session,
+                {
+                    "leadId": config.get("leadId"),
+                    "leadFacts": config.get("leadFacts"),
+                    "leadMissingFields": config.get("leadMissingFields"),
+                },
+            )
 
         channels = config.get("channels", ["customer", "agent"])
         for ch in channels:
@@ -76,6 +108,10 @@ async def handle_text_message(session, raw_message: str) -> None:
             )
 
         await session.send_json({"type": "session_started", "sessionId": session.session_id})
+        return
+
+    if message_type == "lead_context":
+        update_lead_context(session, data)
         return
 
     if message_type == "stop_session":

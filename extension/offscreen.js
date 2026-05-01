@@ -22,6 +22,8 @@ chrome.runtime.onMessage.addListener((message) => {
     setAgentMicPaused(Boolean(message.paused));
   } else if (message.type === 'REQUEST_SUMMARY' && message.offscreen) {
     requestSummary(message.requestId);
+  } else if (message.type === 'SET_SESSION_LEAD_CONTEXT' && message.offscreen) {
+    sendLeadContextToBackend(message);
   }
 });
 
@@ -215,6 +217,27 @@ async function stopCapture() {
     micStream = null;
   }
 }
+
+function sendLeadContextToBackend(context = {}) {
+  if (!backendSocket || backendSocket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  const leadId = context.leadId || context.lead_id || null;
+  const leadFacts = context.leadFacts || context.lead_facts || null;
+  const leadMissingFields = context.leadMissingFields || context.lead_missing_fields || null;
+  if (!leadId && !leadFacts && !leadMissingFields) {
+    return;
+  }
+
+  backendSocket.send(JSON.stringify({
+    type: 'lead_context',
+    leadId,
+    leadFacts,
+    leadMissingFields,
+  }));
+}
+
 
 function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
   return new Promise((resolve, reject) => {

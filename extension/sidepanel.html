@@ -114,7 +114,7 @@
       font-weight: 700;
       letter-spacing: 0.01em;
     }
-    .current-tab-url {
+    .lead-id-lookup {
       display: flex;
       flex-direction: column;
       gap: 4px;
@@ -124,20 +124,46 @@
       background: rgba(15, 23, 40, 0.62);
       min-width: 0;
     }
-    .current-tab-label {
+    .lead-id-label {
       color: var(--muted-strong);
       font-size: 0.68rem;
       font-weight: 800;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    .current-tab-value {
-      color: var(--accent);
-      font-size: 0.78rem;
-      line-height: 1.35;
-      overflow: hidden;
-      text-overflow: ellipsis;
+    .lead-id-form {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .lead-id-input {
+      min-width: 0;
+      flex: 1;
+      border: 1px solid rgba(125, 211, 252, 0.24);
+      border-radius: 10px;
+      background: rgba(2, 6, 23, 0.5);
+      color: var(--text);
+      padding: 9px 10px;
+      font-size: 0.84rem;
+      outline: none;
+    }
+    .lead-id-input:focus {
+      border-color: rgba(56, 189, 248, 0.7);
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.16);
+    }
+    .lead-id-fetch-btn {
+      border: 1px solid rgba(56, 189, 248, 0.36);
+      border-radius: 10px;
+      background: linear-gradient(135deg, #0369a1, #0ea5e9);
+      color: #fff;
+      font-weight: 800;
+      padding: 0 13px;
+      cursor: pointer;
       white-space: nowrap;
+    }
+    .lead-id-fetch-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
     }
     .lead-detail-status {
       display: flex;
@@ -584,6 +610,30 @@
       line-height: 1.45;
       color: var(--text);
     }
+    .chat-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .chat-action-btn {
+      border: 1px solid rgba(125, 211, 252, 0.28);
+      border-radius: 8px;
+      background: rgba(15, 23, 40, 0.72);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 800;
+      padding: 7px 10px;
+    }
+    .chat-action-btn.primary {
+      background: linear-gradient(135deg, #0369a1, #0ea5e9);
+      border-color: rgba(125, 211, 252, 0.42);
+    }
+    .chat-action-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
     .chat-kv-card {
       margin-top: 10px;
       display: grid;
@@ -914,11 +964,14 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
         </button>
       </div>
-      <div id="current-tab-url" class="current-tab-url" title="Current tab URL">
-        <div class="current-tab-label">Current Tab URL</div>
-        <div id="current-tab-url-text" class="current-tab-value">Detecting current tab...</div>
+      <div id="lead-id-lookup" class="lead-id-lookup" title="Lead detail lookup">
+        <div class="lead-id-label">Lead Detail Lookup</div>
+        <form id="lead-id-form" class="lead-id-form">
+          <input id="lead-id-input" class="lead-id-input" type="text" inputmode="numeric" autocomplete="off" placeholder="Enter lead id" />
+          <button id="lead-id-fetch-btn" class="lead-id-fetch-btn" type="submit">Fetch</button>
+        </form>
       </div>
-      <div id="lead-detail-status" class="lead-detail-status">Lead detail check will run on Ambak lead pages.</div>
+      <div id="lead-detail-status" class="lead-detail-status">Enter a lead id and fetch details.</div>
       <div id="lead-detail-data" class="lead-detail-data"></div>
       <div class="capture-controls">
         <button id="toggle-btn" class="control-btn">Start Capture</button>
@@ -970,6 +1023,6 @@
   </div>
 
   <script src="lead-detail-api.js"></script>
-  <script src="sidepanel.js"></script>
+  <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

@@ -11,7 +11,9 @@ from pydantic.types import SecretStr
 
 from app.core.config import get_settings
 from app.services.lead_detail_context import build_lead_detail_chat_context
-from app.services.lead_detail_context import find_direct_lead_detail_answer
+from app.services.lead_detail_context import build_lead_field_index_prompt
+from app.services.lead_detail_context import execute_lead_query_plan
+from app.services.lead_detail_context import format_priority_missing_context
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
 from app.services.schema_registry import get_schema_registry
@@ -107,6 +109,7 @@ def build_stream_reply_prompt(
     context_summary: str,
     known_entities: dict | None,
     last_suggestion: str = "",
+    priority_missing_fields: list[dict] | None = None,
 ) -> str:
     """Build the real-time copilot prompt.
 
@@ -116,12 +119,19 @@ def build_stream_reply_prompt(
     `last_suggestion` is passed so the model is explicitly told not to repeat it.
     """
     known_str = json.dumps(known_entities or {}, ensure_ascii=False)
+    priority_context = format_priority_missing_context(priority_missing_fields or [])
+    priority_instruction = (
+        "\nHigh-priority missing offer fields. If the conversation needs a next step, ask for these before lower-priority fields:\n"
+        f"{priority_context}"
+        if priority_context
+        else ""
+    )
     anti_repeat = (
         f"\nDo NOT repeat this suggestion: {last_suggestion}" if last_suggestion else ""
     )
     return (
         f"{STREAM_SYSTEM_PROMPT}\n\n"
-        f"Already known customer fields (do NOT re-extract these): {known_str}\n"
+        f"Already known customer fields (do NOT re-extract these): {known_str}{priority_instruction}\n"
         f"customer_last_utterance: {customer_last_utterance}\n"
         f"agent_last_utterance: {agent_last_utterance}\n"
         f"context_summary: {context_summary}{anti_repeat}\n\n"
@@ -272,6 +282,188 @@ Assistant reply:
 """
 
 
+
+
+def combine_lead_search_sources(lead_detail: dict | None, lead_facts: dict | None) -> dict | None:
+    if not isinstance(lead_detail, dict) and not isinstance(lead_facts, dict):
+        return None
+    combined: dict = {}
+    if isinstance(lead_facts, dict):
+        combined.update(lead_facts)
+    if isinstance(lead_detail, dict):
+        combined.update(lead_detail)
+    return combined or None
+
+def build_lead_query_plan_prompt(message: str, field_index: str) -> str:
+    return f"""You map a user chat message to a structured query over loaded Ambak lead data.
+
+Return strict JSON only, with one of these shapes:
+{{"action":"fields","paths":["exact.path.one","exact.path.two"]}}
+{{"action":"section","section_path":"exact.object.path"}}
+{{"action":"missing_fields","scope_prefixes":["customer","lead_details"],"field_groups":[],"query_terms":["words from user"],"priority_only":false}}
+{{"action":"missing_documents"}}
+{{"action":"next_step"}}
+{{"action":"fallback"}}
+
+Rules:
+- Return only the data explicitly asked for. Never expand the answer to nearby or related fields.
+- Choose only paths or section prefixes visible in the field index.
+- Use "fields" for specific field questions, including natural language and Hinglish. If the user asks for one attribute such as name, mobile, email, status, amount, date, city, or bank name, return only that exact path.
+- Use "section" only when the user explicitly asks for the whole object with words like all, full, puri, complete, entire, or "all details"; or when the user names an object field itself, such as hierarchy_details, without a specific child attribute.
+- The word "details" alone does not mean section if the user also names a specific attribute. Example: "bank name details" is still a single field.
+- Use "missing_fields" when the user asks which profile/customer/lead fields are missing. Set scope_prefixes to relevant object prefixes from the index.
+- Set "priority_only": true when the user asks for priority/high-priority missing fields. Keep it false when they ask for all missing fields in a scope.
+- Include the user's domain words in query_terms. The backend resolves aliases dynamically to field groups and object scopes.
+- For scope words such as property/customer/lead, still prefer the matching scope_prefixes when obvious.
+- You may also set field_groups when an exact known group is obvious. Supported field_groups: "existing_loan_bt" for BT/existing-loan fields such as previous EMI, previous loan amount, previous loan start date, previous tenure, previous ROI, and remaining loan amount.
+- Use "missing_documents" when the user asks which documents/docs are missing.
+- Use "next_step" when the user asks what to ask next, next action, next step, or follow-up suggestion for this lead.
+- Use "fallback" only when the question is not about loaded lead data.
+- Do not answer with values. The backend will verify values locally.
+
+Examples:
+- bank name? -> {{"action":"fields","paths":["lead_details.bank.banklang.bank_name"]}}
+- puri bank details -> {{"action":"section","section_path":"lead_details.bank"}}
+- rm mobile -> {{"action":"fields","paths":["rmdetails.mobile"]}}
+- hierarchy_details -> {{"action":"section","section_path":"hierarchy_details"}}
+- which priority property details are missing? -> {{"action":"missing_fields","scope_prefixes":["property_details"],"field_groups":[],"query_terms":["property"],"priority_only":true}}
+- missing Existing Loan / BT details -> {{"action":"missing_fields","scope_prefixes":[],"field_groups":[],"query_terms":["existing loan","bt"],"priority_only":true}}
+
+Loaded field index:
+{field_index}
+
+User message:
+{message}
+
+JSON:
+"""
+
+
+def enrich_lead_query_plan(plan: dict | None, message: str) -> dict | None:
+    if not isinstance(plan, dict):
+        return plan
+
+    if str(plan.get("action") or "").strip().lower() != "missing_fields":
+        return plan
+
+    priority_only = bool(plan.get("priority_only"))
+    normalized_message = message.lower()
+    if "priority" in normalized_message or "high priority" in normalized_message or "highest priority" in normalized_message:
+        priority_only = True
+
+    query_terms = [message] if message.strip() else []
+    if priority_only:
+        query_terms = _priority_missing_domain_terms(_normalize_intent_text(message))
+
+    return {
+        **plan,
+        "priority_only": priority_only,
+        "query_terms": query_terms,
+    }
+
+
+NEXT_STEP_REFRESH_CONFIRMATION = (
+    "Last next step loaded hai. Kya database/lead details update hue hain? "
+    "Yes par click karenge to latest lead data fetch karke next step dobara suggest karunga. "
+    "No par click karenge to same data ke basis par previous next step dikhaunga."
+)
+
+
+def _normalize_intent_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+
+
+def is_next_step_query(message: str) -> bool:
+    normalized = _normalize_intent_text(message)
+    if not normalized:
+        return False
+    return (
+        "next step" in normalized
+        or "next action" in normalized
+        or "next follow up" in normalized
+        or "what to ask next" in normalized
+        or "next kya" in normalized
+    )
+
+
+def is_no_refresh_confirmation(message: str) -> bool:
+    normalized = _normalize_intent_text(message)
+    tokens = set(normalized.split())
+    return bool(tokens & {"no", "same"}) or "not updated" in normalized or "no refresh" in normalized
+
+
+PRIORITY_MISSING_DOMAIN_TERMS = (
+    ("property", "property"),
+    ("builder", "builder"),
+    ("project", "project"),
+    ("agreement", "agreement"),
+    ("registration", "registration"),
+    ("credit", "credit"),
+    ("cibil", "cibil"),
+    ("income", "income"),
+    ("salary", "salary"),
+    ("profession", "profession"),
+    ("pancard", "pancard"),
+    ("pan", "pancard"),
+    ("bt", "bt"),
+    ("existing loan", "existing loan"),
+    ("previous loan", "previous loan"),
+    ("prev", "previous loan"),
+    ("emi", "previous loan"),
+    ("roi", "previous loan"),
+    ("tenure", "previous loan"),
+)
+
+
+def _priority_missing_domain_terms(normalized_message: str) -> list[str]:
+    terms: list[str] = []
+    padded = f" {normalized_message} "
+    for needle, term in PRIORITY_MISSING_DOMAIN_TERMS:
+        if f" {needle} " in padded and term not in terms:
+            terms.append(term)
+    return terms
+
+
+def build_deterministic_lead_query_plan(message: str) -> dict | None:
+    normalized = _normalize_intent_text(message)
+    if not normalized:
+        return None
+
+    tokens = set(normalized.split())
+    asks_missing = bool(tokens & {"missing", "pending", "empty", "blank", "null"})
+    asks_priority = bool(tokens & {"priority", "high", "highest", "top"})
+    asks_documents = bool(tokens & {"doc", "docs", "document", "documents"})
+    if asks_missing and asks_priority and not asks_documents:
+        return {
+            "action": "missing_fields",
+            "scope_prefixes": [],
+            "field_groups": [],
+            "query_terms": _priority_missing_domain_terms(normalized),
+            "priority_only": True,
+        }
+
+    return None
+
+
+def _last_next_step_answer(history: list[dict[str, str]] | None) -> str:
+    for turn in reversed(history or []):
+        if turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "").strip()
+        if content.startswith("Next step:"):
+            return content
+    return ""
+
+
+def _last_assistant_asked_refresh_confirmation(history: list[dict[str, str]] | None) -> bool:
+    for turn in reversed(history or []):
+        if turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "").lower()
+        return "database/lead details update" in content
+    return False
+
+
 def build_db_insert_question_prompt(
     customer_info: dict[str, str],
     conversation_context: str,
@@ -374,6 +566,7 @@ class LLMService:
         context_summary: str = "",
         known_entities: dict | None = None,
         last_suggestion: str = "",
+        priority_missing_fields: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         prompt = build_stream_reply_prompt(
             utterance=utterance,
@@ -383,6 +576,7 @@ class LLMService:
             context_summary=context_summary,
             known_entities=known_entities,
             last_suggestion=last_suggestion,
+            priority_missing_fields=priority_missing_fields,
         )
         async for chunk in self.stream_text(prompt, model_name=model_name):
             yield chunk
@@ -509,21 +703,85 @@ class LLMService:
         lead_id: str | int | None = None,
         lead_detail: dict | None = None,
         lead_facts: dict | None = None,
+        lead_missing_fields: list[dict] | None = None,
+        lead_refreshed: bool = False,
         model_name: str | None = None,
     ) -> str:
+        result = await self.generate_chat_reply_payload(
+            message,
+            history,
+            lead_id=lead_id,
+            lead_detail=lead_detail,
+            lead_facts=lead_facts,
+            lead_missing_fields=lead_missing_fields,
+            lead_refreshed=lead_refreshed,
+            model_name=model_name,
+        )
+        return str(result.get("reply") or "")
+
+    async def generate_chat_reply_payload(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None = None,
+        *,
+        lead_id: str | int | None = None,
+        lead_detail: dict | None = None,
+        lead_facts: dict | None = None,
+        lead_missing_fields: list[dict] | None = None,
+        lead_refreshed: bool = False,
+        model_name: str | None = None,
+    ) -> dict:
         timings: dict[str, float] = {}
         overall_start = time.perf_counter()
-        searchable_lead_detail = lead_detail or lead_facts
+        searchable_lead_detail = combine_lead_search_sources(lead_detail, lead_facts)
+        previous_next_step = _last_next_step_answer(history)
 
-        direct_lead_answer = find_direct_lead_detail_answer(message, searchable_lead_detail)
-        if direct_lead_answer:
-            logger.info(
-                "Lead chat direct answer completed: lead_id=%s total_ms=%.2f reply_chars=%d",
-                lead_id,
-                (time.perf_counter() - overall_start) * 1000.0,
-                len(direct_lead_answer),
+        if is_no_refresh_confirmation(message) and previous_next_step and _last_assistant_asked_refresh_confirmation(history):
+            return {
+                "reply": previous_next_step,
+                "used_cached_next_step": True,
+            }
+
+        if searchable_lead_detail and is_next_step_query(message) and previous_next_step and not lead_refreshed:
+            return {
+                "reply": NEXT_STEP_REFRESH_CONFIRMATION,
+                "needs_lead_refresh_confirmation": True,
+                "previous_next_step": previous_next_step,
+            }
+
+        if searchable_lead_detail:
+            plan_start = time.perf_counter()
+            lead_plan = build_deterministic_lead_query_plan(message)
+            if lead_plan is None:
+                field_index = build_lead_field_index_prompt(searchable_lead_detail)
+                lead_plan = await self.generate_json(
+                    build_lead_query_plan_prompt(message, field_index),
+                    model_name=model_name or self.settings.llm_summary_model,
+                )
+            lead_plan = enrich_lead_query_plan(lead_plan, message)
+            lead_answer = execute_lead_query_plan(
+                searchable_lead_detail,
+                lead_plan,
+                lead_missing_fields=lead_missing_fields,
             )
-            return direct_lead_answer
+            timings["lead_plan_ms"] = (time.perf_counter() - plan_start) * 1000.0
+            if lead_answer:
+                logger.info(
+                    "Lead chat planned answer completed: lead_id=%s action=%s plan_ms=%.2f total_ms=%.2f reply_chars=%d",
+                    lead_id,
+                    lead_plan.get("action") if isinstance(lead_plan, dict) else None,
+                    timings["lead_plan_ms"],
+                    (time.perf_counter() - overall_start) * 1000.0,
+                    len(lead_answer),
+                )
+                return {"reply": lead_answer}
+
+            logger.info(
+                "Lead chat planner fell back: lead_id=%s plan=%s plan_ms=%.2f",
+                lead_id,
+                lead_plan,
+                timings["lead_plan_ms"],
+            )
 
         # 1. Retrieve relevant context
         retrieval_start = time.perf_counter()
@@ -570,4 +828,4 @@ class LLMService:
             timings["total_ms"],
             len(reply.strip()),
         )
-        return reply.strip()
+        return {"reply": reply.strip()}

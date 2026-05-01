@@ -1,107 +1,328 @@
 import json
+import logging
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from app.services.text_utils import collapse_text, normalize_text
+
+
+logger = logging.getLogger(__name__)
+
+PRIORITY_FIELDS_PATH = Path(__file__).resolve().parents[3] / "priority_fields.json"
+_PRIORITY_FIELDS_CACHE: tuple[float | None, list[str]] | None = None
+_PRIORITY_SET_CACHE: tuple[tuple[str, ...], set[str]] | None = None
+
+
+@dataclass(frozen=True)
+class LeadFieldSpec:
+    path: str
+    groups: tuple[str, ...] = ()
+    aliases: tuple[str, ...] = ()
+    priority: bool = False
+    section: str = ""
+
+
+def load_priority_field_paths(path: Path = PRIORITY_FIELDS_PATH) -> list[str]:
+    global _PRIORITY_FIELDS_CACHE
+
+    try:
+        stat = path.stat()
+    except OSError:
+        _PRIORITY_FIELDS_CACHE = (None, [])
+        return []
+
+    cached_mtime = _PRIORITY_FIELDS_CACHE[0] if _PRIORITY_FIELDS_CACHE else None
+    if _PRIORITY_FIELDS_CACHE is not None and cached_mtime == stat.st_mtime:
+        return list(_PRIORITY_FIELDS_CACHE[1])
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        payload = []
+
+    paths = [
+        str(item).strip()
+        for item in payload
+        if str(item).strip() and not str(item).strip().endswith("__typename")
+    ] if isinstance(payload, list) else []
+    unique_paths = list(dict.fromkeys(paths))
+    _PRIORITY_FIELDS_CACHE = (stat.st_mtime, unique_paths)
+    return list(unique_paths)
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, dict)):
+        return len(value) == 0
+    return False
+
+
+def _missing_reason(value: Any, *, exists: bool = True) -> str:
+    if not exists:
+        return "not loaded"
+    if value is None:
+        return "null"
+    if isinstance(value, str) and value.strip() == "":
+        return "empty string"
+    if isinstance(value, list) and not value:
+        return "empty array"
+    if isinstance(value, dict) and not value:
+        return "empty object"
+    return "missing"
 
 
 IMPORTANT_PATHS = {
     "id",
     "ref_lead_id",
     "loan_type",
+    "loan_sub_type",
     "loan_sub_type_name",
     "kyc_status",
     "followup_date",
     "followup_type",
+    "followup_status",
     "partner_name",
     "partner_mobile",
     "partner_email",
-    "assign_user.name",
-    "assign_user.email",
-    "assign_user.mobile",
-    "rmdetails.label",
-    "rmdetails.mobile",
-    "rmdetails.email",
-    "status_info.statuslang.status_name",
-    "sub_status_info.substatuslang.sub_status_name",
-    "customer.customer_id",
     "customer.first_name",
     "customer.last_name",
     "customer.mobile",
     "customer.email",
-    "customer.pancard_no",
-    "customer.dob",
-    "customer.gender",
     "customer.marital_status",
-    "customer.occupation",
-    "customer.official_email_id",
-    "customer.employment.employer_name",
-    "customer.employment.designation",
-    "customer.employment.gross_monthly_income",
-    "customer.employment.year_with_company",
-    "customer.bank_details.bank_id",
-    "customer.bank_details.branch_name",
-    "customer.bank_details.account_name",
-    "customer.bank_details.account_type",
-    "lead_details.lead_id",
-    "lead_details.bank_id",
+    "customer.pancard_no",
     "lead_details.loan_amount",
-    "lead_details.login_amount",
-    "lead_details.approved_amount",
-    "lead_details.tenure",
-    "lead_details.annual_income",
     "lead_details.monthly_salary",
     "lead_details.cibil_score",
-    "lead_details.company_name",
-    "lead_details.profession",
     "lead_details.property_city",
     "lead_details.property_state",
-    "lead_details.property_address1",
-    "lead_details.property_address2",
-    "lead_details.property_pincode",
-    "lead_details.property_value",
-    "lead_details.expected_property_value",
+    "lead_details.is_property_identified",
     "lead_details.bank.banklang.bank_name",
 }
 
-QUESTION_STOPWORDS = {
-    "a",
+
+OFFER_PATH_ALIASES = {
+    "lead_details.lead_id": ["lead_details.lead_id", "id", "ref_lead_id"],
+    "lead_details.is_property_decided": [
+        "lead_details.is_property_decided",
+        "lead_details.is_property_identified",
+        "property_details.is_property_identified",
+    ],
+    "property_details.is_property_identified": [
+        "property_details.is_property_identified",
+        "lead_details.is_property_identified",
+        "lead_details.is_property_decided",
+    ],
+    "property_details.property_city": ["property_details.property_city", "lead_details.property_city"],
+    "property_details.property_state": ["property_details.property_state", "lead_details.property_state"],
+    "property_details.expected_market_value": [
+        "property_details.expected_market_value",
+        "lead_details.expected_market_value",
+        "lead_details.expected_property_value",
+        "lead_details.property_value",
+    ],
+    "property_details.registration_value": [
+        "property_details.registration_value",
+        "lead_details.registration_value",
+    ],
+    "property_details.property_type": ["property_details.property_type", "lead_details.property_type"],
+    "property_details.property_sub_type": [
+        "property_details.property_sub_type",
+        "lead_details.property_sub_type",
+    ],
+    "property_details.agreement_type": ["property_details.agreement_type", "lead_details.agreement_type"],
+    "property_details.builder_id": ["property_details.builder_id", "lead_details.builder_id"],
+    "property_details.project_id": ["property_details.project_id", "lead_details.project_id"],
+    "property_details.check_oc_cc": ["property_details.check_oc_cc", "lead_details.check_oc_cc"],
+    "property_details.ready_for_registration": [
+        "property_details.ready_for_registration",
+        "lead_details.ready_for_registration",
+    ],
+}
+
+
+LEAD_FIELD_CATALOG = (
+    LeadFieldSpec(
+        "lead_details.prev_emi_amount",
+        groups=("existing_loan_bt",),
+        aliases=("previous emi", "old emi", "bt emi", "existing loan emi"),
+        priority=True,
+        section="lead_details",
+    ),
+    LeadFieldSpec(
+        "lead_details.prev_loan_amount",
+        groups=("existing_loan_bt",),
+        aliases=("previous loan amount", "old loan amount", "bt loan amount", "existing loan amount"),
+        priority=True,
+        section="lead_details",
+    ),
+    LeadFieldSpec(
+        "lead_details.prev_loan_start_date",
+        groups=("existing_loan_bt",),
+        aliases=("previous loan start date", "old loan start date", "bt start date", "existing loan start date"),
+        priority=True,
+        section="lead_details",
+    ),
+    LeadFieldSpec(
+        "lead_details.prev_tenure",
+        groups=("existing_loan_bt",),
+        aliases=("previous tenure", "old loan tenure", "bt tenure", "existing loan tenure"),
+        priority=True,
+        section="lead_details",
+    ),
+    LeadFieldSpec(
+        "lead_details.prev_current_roi",
+        groups=("existing_loan_bt",),
+        aliases=("previous roi", "old loan roi", "bt roi", "existing loan roi", "current roi"),
+        priority=True,
+        section="lead_details",
+    ),
+    LeadFieldSpec(
+        "lead_details.remaining_loan_amount",
+        groups=("existing_loan_bt",),
+        aliases=("remaining loan", "remaining loan amount", "outstanding loan", "bt outstanding"),
+        priority=True,
+        section="lead_details",
+    ),
+)
+
+
+FIELD_GROUP_ALIASES = {
+    "existing_loan_bt": (
+        "bt",
+        "balance transfer",
+        "existing loan",
+        "old loan",
+        "previous loan",
+        "running loan",
+    ),
+}
+
+
+FIELD_SCOPE_ALIASES = {
+    "property_details": (
+        "property",
+        "property detail",
+        "property details",
+        "property info",
+        "property information",
+    ),
+    "customer": (
+        "customer",
+        "customer profile",
+        "profile",
+    ),
+    "lead_details": (
+        "lead",
+        "lead detail",
+        "lead details",
+    ),
+}
+
+
+QUERY_STOPWORDS = {
     "about",
+    "are",
     "batao",
-    "bataiye",
+    "btao",
+    "details",
+    "detail",
+    "field",
+    "fields",
+    "give",
     "hai",
+    "hain",
+    "high",
+    "highest",
     "is",
+    "all",
+    "ka",
+    "kaun",
+    "kaunsa",
+    "kaunse",
+    "kaunsi",
+    "kar",
+    "kare",
+    "karen",
+    "karo",
+    "ke",
+    "ki",
+    "kon",
+    "konsa",
+    "konse",
+    "konsi",
     "kya",
+    "list",
+    "do",
     "me",
+    "mei",
     "mein",
-    "name",
-    "of",
-    "please",
+    "missing",
+    "pending",
+    "priority",
+    "se",
+    "si",
+    "top",
+    "show",
     "tell",
     "the",
-    "this",
     "what",
     "which",
 }
 
 
-def _iter_leaf_values(value: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
+QUERY_TOKEN_EXPANSIONS = {
+    "bt": {"bt", "prev", "previous", "loan"},
+    "builder": {"builder"},
+    "credit": {"credit", "cibil"},
+    "cibil": {"cibil", "credit"},
+    "income": {"income", "salary"},
+    "loan": {"loan"},
+    "project": {"project"},
+    "property": {"property", "builder", "project", "agreement", "registration"},
+    "roi": {"roi"},
+    "salary": {"salary", "income"},
+}
+
+
+def iter_leaf_entries(
+    value: Any,
+    prefix: str = "",
+    *,
+    include_blank: bool = False,
+) -> Iterator[tuple[str, Any]]:
     if isinstance(value, dict):
         for key, nested_value in value.items():
             nested_prefix = f"{prefix}.{key}" if prefix else str(key)
-            yield from _iter_leaf_values(nested_value, nested_prefix)
+            yield from iter_leaf_entries(
+                nested_value,
+                prefix=nested_prefix,
+                include_blank=include_blank,
+            )
         return
 
     if isinstance(value, list):
-        for index, nested_value in enumerate(value[:10]):
+        for index, nested_value in enumerate(value[:25]):
             nested_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
-            yield from _iter_leaf_values(nested_value, nested_prefix)
+            yield from iter_leaf_entries(
+                nested_value,
+                prefix=nested_prefix,
+                include_blank=include_blank,
+            )
         return
 
-    if value not in (None, ""):
+    if include_blank or value not in (None, ""):
         yield prefix, value
 
 
 def _format_value(value: Any, *, max_chars: int = 500) -> str:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "Missing"
     if isinstance(value, (dict, list)):
         text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     else:
@@ -118,121 +339,703 @@ def _format_label(path: str) -> str:
     return leaf.replace("_", " ").strip().capitalize()
 
 
-def _format_direct_answer(rows: list[tuple[str, Any]]) -> str:
-    return "\n".join(
-        f"{label}: {_format_value(value)}" for label, value in rows if value not in (None, "")
-    )
+def _format_group_label(path: str) -> str:
+    label = re.sub(r"\[\d+\]", "", path).strip("_")
+    label = re.sub(r"_id$", "", label)
+    normalized = label.replace("_", " ").strip()
+    acronym = normalized.replace(" ", "").upper()
+    if acronym in {"RM", "ABM", "SBM", "NH", "SH"}:
+        return acronym
+    return normalized.title()
 
 
-def _first_value(lead_detail: dict[str, Any], paths: list[str]) -> Any:
-    values = dict(_iter_leaf_values(lead_detail))
-    for path in paths:
-        value = values.get(path)
-        if value not in (None, ""):
-            return value
+def _format_section_heading(prefix: str) -> str:
+    label = _format_label(prefix)
+    if label.lower().endswith("details"):
+        return f"{label}:"
+    return f"{label} details:"
+
+
+def _path_value(lead_detail: dict[str, Any], path: str) -> tuple[bool, Any]:
+    if path in lead_detail:
+        return True, lead_detail.get(path)
+
+    indexed_path = f"[0].{path}"
+    if indexed_path in lead_detail:
+        return True, lead_detail.get(indexed_path)
+
+    current: Any = lead_detail
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            break
+        current = current[part]
+    else:
+        return True, current
+
+    if isinstance(lead_detail, list) and lead_detail:
+        first_item = lead_detail[0]
+        if isinstance(first_item, dict):
+            return _path_value(first_item, path)
+
+    return False, None
+
+
+def _equivalent_offer_paths(path: str) -> list[str]:
+    candidates = list(OFFER_PATH_ALIASES.get(path, [path]))
+    if path.startswith("property_details."):
+        candidates.append("lead_details." + path.split(".", 1)[1])
+    if path.startswith("lead_details."):
+        candidates.append(path.split(".", 1)[1])
+
+    expanded_candidates: list[str] = []
+    for candidate in candidates:
+        expanded_candidates.append(candidate)
+        if not candidate.startswith("[0]."):
+            expanded_candidates.append(f"[0].{candidate}")
+    return list(dict.fromkeys(candidate for candidate in expanded_candidates if candidate))
+
+
+def _resolve_offer_path_value(lead_detail: dict[str, Any], path: str) -> tuple[bool, Any, str]:
+    for candidate in _equivalent_offer_paths(path):
+        exists, value = _path_value(lead_detail, candidate)
+        if exists:
+            return True, value, candidate
+    return False, None, path
+
+
+def _equivalent_missing_item(
+    existing_missing: dict[str, dict[str, Any]],
+    path: str,
+) -> dict[str, Any] | None:
+    for candidate in _equivalent_offer_paths(path):
+        if candidate in existing_missing:
+            return existing_missing[candidate]
     return None
 
 
-def _maybe_grouped_direct_answer(message: str, lead_detail: dict[str, Any]) -> str:
-    normalized = _normalize_lookup_text(message)
-
-    if "customer" in normalized and "name" in normalized and "first" not in normalized and "last" not in normalized:
-        first_name = _first_value(lead_detail, ["customer.first_name"])
-        last_name = _first_value(lead_detail, ["customer.last_name"])
-        full_name = " ".join(str(part).strip() for part in (first_name, last_name) if part)
-        if full_name:
-            return _format_direct_answer([("Customer name", full_name)])
-
-    if "followup" in normalized or "follow up" in normalized:
-        rows = [
-            ("Followup date", _first_value(lead_detail, ["followup_date"])),
-            ("Followup type", _first_value(lead_detail, ["followup_type"])),
-            ("Followup status", _first_value(lead_detail, ["followup_status"])),
-        ]
-        return _format_direct_answer(rows)
-
-    return ""
+def _all_values(lead_detail: dict[str, Any]) -> dict[str, Any]:
+    return dict(iter_leaf_entries(lead_detail, include_blank=True))
 
 
-def _normalize_lookup_text(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-    return re.sub(r"\s+", " ", normalized)
+def build_lead_field_index(lead_detail: dict[str, Any] | None, *, max_fields: int = 700) -> list[dict[str, str]]:
+    if not lead_detail:
+        return []
+
+    fields: list[dict[str, str]] = []
+    for path, value in iter_leaf_entries(lead_detail, include_blank=True):
+        if path.endswith(".__typename") or path.endswith("__typename"):
+            continue
+        fields.append(
+            {
+                "path": path,
+                "label": _format_label(path),
+                "status": "missing" if _format_value(value) == "Missing" else "available",
+            }
+        )
+        if len(fields) >= max_fields:
+            break
+    return fields
 
 
-def _path_aliases(path: str) -> set[str]:
-    parts = [part for part in re.split(r"[.\[\]]+", path) if part and not part.isdigit()]
-    aliases = {_normalize_lookup_text(path), _normalize_lookup_text(path.replace(".", " "))}
-    if parts:
-        leaf = parts[-1]
-        aliases.add(_normalize_lookup_text(leaf))
-        aliases.add(_normalize_lookup_text(leaf.replace("_", " ")))
-    if len(parts) >= 2:
-        aliases.add(_normalize_lookup_text(" ".join(parts[-2:])))
-        aliases.add(_normalize_lookup_text(" ".join(part.replace("_", " ") for part in parts[-2:])))
-    return {alias for alias in aliases if alias}
+def build_lead_field_index_prompt(lead_detail: dict[str, Any] | None) -> str:
+    fields = build_lead_field_index(lead_detail)
+    if not fields:
+        return "No loaded lead fields available."
+    return "\n".join(
+        f"- {field['path']} | {field['label']} | {field['status']}"
+        for field in fields
+    )
 
 
-def _looks_like_lead_detail_question(message: str) -> bool:
-    normalized = _normalize_lookup_text(message)
-    if not normalized:
-        return False
-    lead_terms = {
-        "amount",
-        "bank",
-        "cibil",
-        "company",
-        "customer",
-        "email",
-        "followup",
-        "lead",
-        "loan",
-        "mobile",
-        "name",
-        "partner",
-        "property",
-        "rm",
-        "salary",
-        "status",
-        "tenure",
-    }
-    return bool(set(normalized.split()) & lead_terms)
+def _format_rows(rows: list[tuple[str, Any]]) -> str:
+    return "\n".join(f"{label}: {_format_value(value)}" for label, value in rows)
 
 
-def find_direct_lead_detail_answer(message: str, lead_detail: dict[str, Any] | None) -> str:
-    if not lead_detail or not _looks_like_lead_detail_question(message):
+def _format_grouped_section_rows(rows: list[tuple[str, Any]]) -> str:
+    grouped: dict[str, list[tuple[str, Any]]] = {}
+    for path, value in rows:
+        group_key, field_path = path.split(".", 1)
+        grouped.setdefault(group_key, []).append((_format_label(field_path), value))
+
+    groups: list[str] = []
+    for group_key, group_rows in grouped.items():
+        group_lines = [f"- {label}: {_format_value(value)}" for label, value in group_rows]
+        groups.append(f"{_format_group_label(group_key)}:\n" + "\n".join(group_lines))
+    return "\n\n".join(groups)
+
+
+def _execute_fields(lead_detail: dict[str, Any], paths: list[Any]) -> str:
+    rows: list[tuple[str, Any]] = []
+    for raw_path in paths:
+        path = str(raw_path).strip()
+        if not path:
+            continue
+        exists, value = _path_value(lead_detail, path)
+        if exists:
+            rows.append((_format_label(path), value))
+    return _format_rows(rows)
+
+
+def _execute_section(lead_detail: dict[str, Any], section_path: Any) -> str:
+    prefix = str(section_path or "").strip().strip(".")
+    if not prefix:
         return ""
 
-    grouped_answer = _maybe_grouped_direct_answer(message, lead_detail)
-    if grouped_answer:
-        return grouped_answer
+    rows: list[tuple[str, Any]] = []
+    for path, value in iter_leaf_entries(lead_detail, include_blank=True):
+        if path == prefix:
+            rows.append((path, value))
+            continue
+        if not path.startswith(f"{prefix}."):
+            continue
+        if path.endswith(".__typename") or path.endswith("__typename"):
+            continue
+        rows.append((path[len(prefix) + 1 :], value))
 
-    normalized_message = _normalize_lookup_text(message)
-    message_tokens = {
-        token for token in normalized_message.split() if token not in QUESTION_STOPWORDS
+    if not rows:
+        return ""
+
+    has_direct_rows = any("." not in path for path, _value in rows)
+    section_rows = (
+        _format_grouped_section_rows(rows)
+        if not has_direct_rows
+        else _format_rows([(_format_label(path), value) for path, value in rows])
+    )
+    return f"{_format_section_heading(prefix)}\n" + section_rows
+
+
+def _valid_scope_prefixes(lead_detail: dict[str, Any], scope_prefixes: list[Any]) -> list[str]:
+    requested_prefixes = [
+        str(prefix).strip().strip(".")
+        for prefix in scope_prefixes
+        if str(prefix).strip().strip(".")
+    ]
+    if not requested_prefixes:
+        return []
+
+    leaf_paths = [
+        path
+        for path, _value in iter_leaf_entries(lead_detail, include_blank=True)
+        if not path.endswith(".__typename") and not path.endswith("__typename")
+    ]
+    valid_prefixes: list[str] = []
+    for prefix in requested_prefixes:
+        if any(path == prefix or path.startswith(f"{prefix}.") for path in leaf_paths):
+            valid_prefixes.append(prefix)
+
+    return valid_prefixes
+
+
+def _is_priority_path(path: str) -> bool:
+    global _PRIORITY_SET_CACHE
+    priority_paths = tuple(load_priority_field_paths())
+    if _PRIORITY_SET_CACHE is None or _PRIORITY_SET_CACHE[0] != priority_paths:
+        _PRIORITY_SET_CACHE = (priority_paths, set(priority_paths))
+    normalized_path = re.sub(r"^\[\d+\]\.", "", path)
+    candidates = {path, normalized_path}
+    for candidate in list(candidates):
+        candidates.update(re.sub(r"^\[\d+\]\.", "", alias) for alias in _equivalent_offer_paths(candidate))
+    return bool(candidates & _PRIORITY_SET_CACHE[1])
+
+
+def _normalize_query_text(value: str) -> str:
+    return collapse_text(value)
+
+
+def _tokenize_search_text(value: str) -> set[str]:
+    return {
+        token
+        for token in normalize_text(value).split()
+        if token and token not in QUERY_STOPWORDS and len(token) > 1
     }
 
-    best_match: tuple[int, str, Any] | None = None
-    for path, value in _iter_leaf_values(lead_detail):
-        aliases = _path_aliases(path)
-        score = 0
-        for alias in aliases:
-            alias_tokens = set(alias.split())
-            if alias and alias in normalized_message:
-                score = max(score, 100 + len(alias_tokens))
-            elif alias_tokens and alias_tokens.issubset(message_tokens):
-                score = max(score, 80 + len(alias_tokens))
+
+def _expanded_query_tokens(query_terms: list[str]) -> set[str]:
+    tokens: set[str] = set()
+    for term in query_terms:
+        tokens.update(_tokenize_search_text(str(term)))
+
+    expanded = set(tokens)
+    for token in tokens:
+        expanded.update(QUERY_TOKEN_EXPANSIONS.get(token, set()))
+    return expanded
+
+
+def _path_search_tokens(path: str) -> set[str]:
+    tokens = _tokenize_search_text(path)
+    tokens.update(_tokenize_search_text(_format_label(path)))
+    for candidate in _equivalent_offer_paths(path):
+        tokens.update(_tokenize_search_text(candidate))
+    return tokens
+
+
+def _candidate_paths_for_query_terms(query_terms: list[str], candidate_paths: list[str]) -> set[str] | None:
+    query_tokens = _expanded_query_tokens(query_terms)
+    if not query_tokens:
+        return None
+
+    matched_paths = {
+        path
+        for path in candidate_paths
+        if query_tokens.intersection(_path_search_tokens(path))
+    }
+    return matched_paths
+
+
+def _catalog_paths_for_groups(groups: list[str]) -> set[str]:
+    normalized_groups = {group.strip().lower() for group in groups if group.strip()}
+    return {
+        spec.path
+        for spec in LEAD_FIELD_CATALOG
+        if normalized_groups.intersection(spec.groups)
+    }
+
+
+def _catalog_groups_for_terms(query_terms: list[str]) -> set[str]:
+    normalized_terms = {
+        _normalize_query_text(term)
+        for term in query_terms
+        if str(term).strip()
+    }
+    if not normalized_terms:
+        return set()
+
+    matched_groups: set[str] = set()
+    for group, aliases in FIELD_GROUP_ALIASES.items():
+        candidates = {_normalize_query_text(group.replace("_", " "))}
+        candidates.update(_normalize_query_text(alias) for alias in aliases)
+        if any(
+            term == candidate or term in candidate or candidate in term
+            for term in normalized_terms
+            for candidate in candidates
+        ):
+            matched_groups.add(group)
+
+    for spec in LEAD_FIELD_CATALOG:
+        candidates = {_normalize_query_text(spec.path), _normalize_query_text(_format_label(spec.path))}
+        candidates.update(_normalize_query_text(alias) for alias in spec.aliases)
+        if any(
+            term == candidate or term in candidate or candidate in term
+            for term in normalized_terms
+            for candidate in candidates
+        ):
+            matched_groups.update(spec.groups)
+
+    return matched_groups
+
+
+def _catalog_scopes_for_terms(query_terms: list[str]) -> set[str]:
+    normalized_terms = {
+        _normalize_query_text(term)
+        for term in query_terms
+        if str(term).strip()
+    }
+    if not normalized_terms:
+        return set()
+
+    matched_scopes: set[str] = set()
+    for scope, aliases in FIELD_SCOPE_ALIASES.items():
+        candidates = {_normalize_query_text(scope.replace("_", " "))}
+        candidates.update(_normalize_query_text(alias) for alias in aliases)
+        if any(
+            term == candidate or term in candidate or candidate in term
+            for term in normalized_terms
+            for candidate in candidates
+        ):
+            matched_scopes.add(scope)
+    return matched_scopes
+
+
+def _matches_any_scope(path: str, scope_prefixes: list[str]) -> bool:
+    if not scope_prefixes:
+        return True
+    candidates = _equivalent_offer_paths(path)
+    return any(
+        candidate == prefix or candidate.startswith(f"{prefix}.")
+        for candidate in candidates
+        for prefix in scope_prefixes
+    )
+
+
+def _matches_any_field_group(path: str, field_groups: list[str]) -> bool:
+    groups = [group.strip().lower() for group in field_groups if group.strip()]
+    if not groups:
+        return True
+
+    allowed_paths = _catalog_paths_for_groups(groups)
+
+    if not allowed_paths:
+        return True
+
+    candidates = set(_equivalent_offer_paths(path))
+    expanded_allowed = {
+        candidate
+        for allowed_path in allowed_paths
+        for candidate in _equivalent_offer_paths(allowed_path)
+    }
+    return bool(candidates & expanded_allowed)
+
+
+def _format_missing_field_rows(rows: list[tuple[str, str, bool]]) -> str:
+    if not rows:
+        return "Missing fields: None found in loaded lead data."
+
+    priority_lines: list[str] = []
+    other_lines: list[str] = []
+    seen: set[str] = set()
+    for label, reason, is_priority in rows:
+        key = f"{label}|{reason}|{is_priority}"
+        if key in seen:
+            continue
+        seen.add(key)
+        suffix = f" ({reason})" if reason else ""
+        line = f"- {label}{suffix}"
+        if is_priority:
+            priority_lines.append(line)
+        else:
+            other_lines.append(line)
+
+    if priority_lines and other_lines:
+        return "High priority missing fields:\n" + "\n".join(priority_lines) + "\n\nOther missing fields:\n" + "\n".join(other_lines)
+    if priority_lines:
+        return "High priority missing fields:\n" + "\n".join(priority_lines)
+    return "Missing fields:\n" + "\n".join(other_lines)
+
+
+def build_priority_missing_fields(
+    lead_detail: dict[str, Any] | None,
+    lead_missing_fields: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    priority_paths = load_priority_field_paths()
+    if not priority_paths:
+        return []
+
+    detail = lead_detail or {}
+    existing_missing = {
+        str(item.get("path") or ""): item
+        for item in (lead_missing_fields or [])
+        if isinstance(item, dict) and item.get("path")
+    }
+
+    priority_missing: list[dict[str, str]] = []
+    resolved_debug: list[dict[str, Any]] = []
+    missing_debug: list[dict[str, Any]] = []
+    for priority_path in priority_paths:
+        exists, value, resolved_path = (
+            _resolve_offer_path_value(detail, priority_path)
+            if detail
+            else (False, None, priority_path)
+        )
+        source_item = _equivalent_missing_item(existing_missing, priority_path)
+        if exists and not _is_missing_value(value):
+            resolved_debug.append({"path": priority_path, "resolved_path": resolved_path, "value": _format_value(value, max_chars=80)})
+            continue
+        if exists:
+            reason = _missing_reason(value, exists=True)
+        elif source_item:
+            reason = str(source_item.get("reason") or _missing_reason(value, exists=False)).replace("_", " ").strip()
+        else:
+            reason = _missing_reason(value, exists=False)
+        missing_debug.append({"path": priority_path, "resolved_path": resolved_path, "reason": reason, "had_source_item": bool(source_item)})
+
+        priority_missing.append(
+            {
+                "path": priority_path,
+                "resolved_path": resolved_path,
+                "label": str(source_item.get("label") if source_item else _format_label(priority_path)),
+                "reason": reason,
+                "priority": "high",
+            }
+        )
+
+    logger.info(
+        "[LeadDebug][backend] priority resolution: loaded_priority=%s missing_priority=%s loaded_sample=%s missing_sample=%s detail_key_count=%d",
+        len(resolved_debug),
+        len(priority_missing),
+        resolved_debug[:12],
+        missing_debug[:12],
+        len(detail),
+    )
+    return priority_missing
+
+
+def format_priority_missing_context(priority_missing_fields: list[dict[str, Any]], *, limit: int = 8) -> str:
+    rows: list[str] = []
+    for item in priority_missing_fields[:limit]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or _format_label(str(item.get("path") or ""))).strip()
+        path = str(item.get("path") or "").strip()
+        reason = str(item.get("reason") or "missing").replace("_", " ").strip()
+        if label and path:
+            rows.append(f"- {label} ({path}, {reason})")
+    return "\n".join(rows)
+
+
+def _execute_precomputed_missing_fields(
+    lead_detail: dict[str, Any],
+    lead_missing_fields: list[dict[str, Any]],
+    scope_prefixes: list[Any],
+    field_groups: list[Any],
+    query_terms: list[Any],
+    *,
+    priority_only: bool = False,
+) -> str:
+    loaded_paths = [str(item.get("path") or "") for item in lead_missing_fields if isinstance(item, dict)]
+    valid_prefixes, requested_groups, query_matched_paths = _resolve_prefixes_and_groups(
+        scope_prefixes, field_groups, query_terms, loaded_paths=loaded_paths
+    )
+
+    verified_loaded_debug: list[dict[str, Any]] = []
+    verified_missing_debug: list[dict[str, Any]] = []
+    rows: list[tuple[str, str, bool]] = []
+    for item in lead_missing_fields:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path or path.endswith(".__typename") or path.endswith("__typename"):
+            continue
+        is_priority = item.get("priority") == "high" or _is_priority_path(path)
+        if priority_only and not is_priority:
+            continue
+        if is_priority:
+            exists, value, _resolved_path = _resolve_offer_path_value(lead_detail, path)
+            if exists and not _is_missing_value(value):
+                verified_loaded_debug.append({"path": path, "resolved_path": _resolved_path, "value": _format_value(value, max_chars=80)})
+                continue
+            if exists:
+                item = {**item, "reason": _missing_reason(value, exists=True)}
+                verified_missing_debug.append({"path": path, "resolved_path": _resolved_path, "reason": item["reason"]})
             else:
-                overlap = len(alias_tokens & message_tokens)
-                if overlap:
-                    score = max(score, overlap)
-        if score and (best_match is None or score > best_match[0]):
-            best_match = (score, path, value)
+                verified_missing_debug.append({"path": path, "resolved_path": _resolved_path, "reason": item.get("reason")})
+        if valid_prefixes and not _matches_any_scope(path, valid_prefixes):
+            continue
+        if not _matches_any_field_group(path, requested_groups):
+            continue
+        if query_matched_paths is not None and path not in query_matched_paths:
+            continue
+        label = str(item.get("label") or _format_label(path)).strip()
+        reason = str(item.get("reason") or "").replace("_", " ").strip()
+        rows.append((label, reason, is_priority))
 
-    if best_match is None or best_match[0] < 2:
+    logger.info(
+        "[LeadDebug][backend] precomputed missing verification: input_missing=%d returned_rows=%d verified_loaded_sample=%s verified_missing_sample=%s lead_detail_keys=%s",
+        len(lead_missing_fields),
+        len(rows),
+        verified_loaded_debug[:12],
+        verified_missing_debug[:12],
+        list(lead_detail.keys())[:30],
+    )
+    return _format_missing_field_rows(rows)
+
+
+def _resolve_prefixes_and_groups(
+    scope_prefixes: list[Any],
+    field_groups: list[Any],
+    query_terms: list[Any],
+    loaded_paths: list[str] | None = None,
+    lead_detail: dict[str, Any] | None = None,
+) -> tuple[list[str], list[str], set[str] | None]:
+    """Extract and resolve scope prefixes, field groups, and query-matched paths."""
+    query_texts = [str(term) for term in query_terms if str(term).strip()]
+    term_scopes = _catalog_scopes_for_terms(query_texts)
+    term_groups = _catalog_groups_for_terms(query_texts)
+
+    plan_prefixes = [
+        str(prefix).strip().strip(".")
+        for prefix in scope_prefixes
+        if str(prefix).strip().strip(".")
+    ]
+    requested_prefixes = plan_prefixes if not query_texts else list(term_scopes)
+
+    plan_groups = [
+        str(group).strip().lower()
+        for group in field_groups
+        if str(group).strip()
+    ]
+    requested_groups = plan_groups if not query_texts else list(term_groups)
+
+    valid_prefixes = requested_prefixes
+    if lead_detail is not None and loaded_paths is None:
+        valid_prefixes = _valid_scope_prefixes(lead_detail, requested_prefixes)
+
+    if loaded_paths is not None:
+        valid_prefixes = [
+            prefix
+            for prefix in requested_prefixes
+            if any(path == prefix or path.startswith(f"{prefix}.") for path in loaded_paths)
+        ]
+
+    candidate_paths = loaded_paths if loaded_paths is not None else (
+        [path for path, _ in iter_leaf_entries(lead_detail, include_blank=True)
+         if not path.endswith(".__typename") and not path.endswith("__typename")]
+        + load_priority_field_paths()
+    )
+
+    query_matched_paths: set[str] | None = (
+        None
+        if valid_prefixes or requested_groups
+        else _candidate_paths_for_query_terms([str(term) for term in query_terms], candidate_paths)
+    )
+    return valid_prefixes, requested_groups, query_matched_paths
+
+
+def _execute_missing_fields(
+    lead_detail: dict[str, Any],
+    scope_prefixes: list[Any],
+    field_groups: list[Any],
+    query_terms: list[Any],
+    *,
+    priority_only: bool = False,
+) -> str:
+    prefixes, groups, query_matched_paths = _resolve_prefixes_and_groups(
+        scope_prefixes, field_groups, query_terms, lead_detail=lead_detail
+    )
+    missing: list[tuple[str, str, bool]] = [
+        (item["label"], item["reason"], True)
+        for item in build_priority_missing_fields(lead_detail, None)
+        if _matches_any_scope(item["path"], prefixes)
+        and _matches_any_field_group(item["path"], groups)
+        and (query_matched_paths is None or item["path"] in query_matched_paths)
+    ]
+    for path, _v in iter_leaf_entries(lead_detail, include_blank=True):
+        if path.endswith(".__typename") or path.endswith("__typename"):
+            continue
+        is_priority = _is_priority_path(path)
+        if priority_only and not is_priority:
+            continue
+        if prefixes and not _matches_any_scope(path, prefixes):
+            continue
+        if not _matches_any_field_group(path, groups):
+            continue
+        if query_matched_paths is not None and path not in query_matched_paths:
+            continue
+        if _format_value(_v) == "Missing":
+            missing.append((_format_label(path), _missing_reason(_v), is_priority))
+
+    return _format_missing_field_rows(missing)
+
+
+def _doc_group_label(group: dict[str, Any], fallback: str) -> str:
+    for key in ("label", "name", "doc_name", "document_name", "doc_id", "parent_doc_id"):
+        value = group.get(key)
+        if value not in (None, ""):
+            label = str(value).replace("_", " ").strip()
+            return f"doc {label}" if key.endswith("id") else label
+    return fallback
+
+
+def _is_uploaded_doc_group(group: dict[str, Any]) -> bool:
+    upload_value = group.get("is_doc_uploaded")
+    if str(upload_value).strip().lower() in {"1", "true", "yes", "uploaded"}:
+        return True
+
+    status_value = str(group.get("status") or group.get("doc_status") or "").strip().lower()
+    if status_value in {"1", "2", "active", "approved", "complete", "completed", "done", "uploaded", "verified"}:
+        return True
+
+    upload_url = group.get("doc_upload_url") or group.get("doc_path")
+    return bool(upload_url)
+
+
+def _execute_next_step(
+    lead_detail: dict[str, Any],
+    lead_missing_fields: list[dict[str, Any]] | None = None,
+) -> str:
+    priority_missing = build_priority_missing_fields(lead_detail, lead_missing_fields)
+    source = priority_missing
+    if not source and lead_missing_fields:
+        source = [item for item in lead_missing_fields if isinstance(item, dict)]
+
+    if not source:
+        return "Next step: High-priority offer fields complete dikh rahe hain. Ab customer se remaining process/document status confirm karein."
+
+    labels = []
+    for item in source[:3]:
+        label = str(item.get("label") or _format_label(str(item.get("path") or ""))).strip()
+        if label and label not in labels:
+            labels.append(label)
+
+    if not labels:
+        return ""
+    joined = ", ".join(labels)
+    return f"Next step: Customer se {joined} confirm karein, kyunki ye high-priority offer fields missing hain."
+
+
+def _execute_missing_documents(lead_detail: dict[str, Any]) -> str:
+    doc_groups: dict[str, dict[str, Any]] = {}
+    for path, value in iter_leaf_entries(lead_detail, include_blank=True):
+        if "recommended_docs" not in path and "leaddocs" not in path:
+            continue
+        match = re.match(r"(.+?\[\d+\])\.(.+)$", path)
+        if not match:
+            continue
+        group_key, field_name = match.groups()
+        doc_groups.setdefault(group_key, {})[field_name] = value
+
+    if not doc_groups:
+        return "Missing documents: Not available in loaded lead data."
+
+    missing: list[str] = []
+    for group_key, group in sorted(doc_groups.items()):
+        if "recommended_docs" in group_key and not _is_uploaded_doc_group(group):
+            missing.append(_doc_group_label(group, group_key))
+
+    if not missing:
+        return "Missing documents: None found in loaded recommended docs."
+    return "Missing documents:\n" + "\n".join(f"- {label}" for label in missing)
+
+
+def execute_lead_query_plan(
+    lead_detail: dict[str, Any] | None,
+    plan: dict[str, Any] | None,
+    *,
+    lead_missing_fields: list[dict[str, Any]] | None = None,
+) -> str:
+    if not lead_detail or not isinstance(plan, dict):
         return ""
 
-    _, path, value = best_match
-    return _format_direct_answer([(_format_label(path), value)])
+    action = str(plan.get("action") or "").strip().lower()
+    if action == "fields":
+        paths = plan.get("paths") if isinstance(plan.get("paths"), list) else []
+        return _execute_fields(lead_detail, paths)
+    if action == "section":
+        return _execute_section(lead_detail, plan.get("section_path"))
+    if action == "missing_fields":
+        scope_prefixes = plan.get("scope_prefixes") if isinstance(plan.get("scope_prefixes"), list) else []
+        field_groups = plan.get("field_groups") if isinstance(plan.get("field_groups"), list) else []
+        query_terms = plan.get("query_terms") if isinstance(plan.get("query_terms"), list) else []
+        priority_only = bool(plan.get("priority_only"))
+        if lead_missing_fields:
+            combined_missing = list(lead_missing_fields)
+            existing_paths = {
+                str(item.get("path") or "")
+                for item in combined_missing
+                if isinstance(item, dict)
+            }
+            for priority_item in build_priority_missing_fields(lead_detail, lead_missing_fields):
+                if priority_item["path"] not in existing_paths:
+                    combined_missing.append(priority_item)
+            return _execute_precomputed_missing_fields(
+                lead_detail,
+                combined_missing,
+                scope_prefixes,
+                field_groups,
+                query_terms,
+                priority_only=priority_only,
+            )
+        return _execute_missing_fields(
+            lead_detail,
+            scope_prefixes,
+            field_groups,
+            query_terms,
+            priority_only=priority_only,
+        )
+    if action == "missing_documents":
+        return _execute_missing_documents(lead_detail)
+    if action == "next_step":
+        return _execute_next_step(lead_detail, lead_missing_fields)
+    return ""
 
 
 def build_lead_detail_chat_context(
@@ -244,7 +1047,7 @@ def build_lead_detail_chat_context(
     if not lead_detail:
         return ""
 
-    flattened = list(_iter_leaf_values(lead_detail))
+    flattened = list(iter_leaf_entries(lead_detail, include_blank=True))
     important_lines: list[str] = []
     searchable_lines: list[str] = []
     seen_paths: set[str] = set()
@@ -255,7 +1058,7 @@ def build_lead_detail_chat_context(
             seen_paths.add(path)
 
     for path, value in flattened:
-        if path in seen_paths:
+        if path in seen_paths or path.endswith("__typename"):
             continue
         searchable_lines.append(f"- {path}: {_format_value(value)}")
         if len(searchable_lines) >= max_flat_fields:

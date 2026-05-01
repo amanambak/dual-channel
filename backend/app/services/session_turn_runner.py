@@ -47,6 +47,7 @@ async def run_turn_graph(
             "agent_last_utterance": session.state.agent_last_utterance,
             "context_summary": session.state.rolling_summary or conversation_context,
             "last_suggestion": session.state.last_suggestion,
+            "lead_priority_missing_fields": list(session.state.lead_priority_missing_fields),
         }
 
         full_text = ""

@@ -1,5 +1,7 @@
 // sidepanel.js — Native Side Panel Logic
 
+import { normalizeLeadIdInput } from './utils.js';
+
 let currentCard = null;
 let pendingMergeCard = null;
 let pendingMergeAt = 0;
@@ -23,8 +25,9 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send-btn');
 const clearChatBtn = document.getElementById('clear-chat-btn');
-const currentTabUrl = document.getElementById('current-tab-url');
-const currentTabUrlText = document.getElementById('current-tab-url-text');
+const leadIdForm = document.getElementById('lead-id-form');
+const leadIdInput = document.getElementById('lead-id-input');
+const leadIdFetchBtn = document.getElementById('lead-id-fetch-btn');
 const leadDetailStatus = document.getElementById('lead-detail-status');
 const leadDetailData = document.getElementById('lead-detail-data');
 
@@ -35,10 +38,9 @@ let latestSummary = null;
 let latestLeadDetail = null;
 let latestLeadId = null;
 let latestLeadFacts = null;
-let leadDetailLookupTimer = null;
+let latestLeadMissingFields = null;
 let leadDetailRequestId = 0;
-let lastLeadLookupKey = '';
-let leadLookupInFlightKey = '';
+let leadFetchInFlight = false;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -46,12 +48,6 @@ async function loadStoredMessages() {
       resolve(response?.messages || []);
     });
   });
-}
-
-async function loadStoredChatMessages() {
-  const result = await chrome.storage.local.get(['chatMessages', 'activePanelTab']);
-  chatMessages = Array.isArray(result.chatMessages) ? result.chatMessages : [];
-  activePanelTab = result.activePanelTab === 'chat' ? 'chat' : 'call';
 }
 
 async function persistChatMessages() {
@@ -91,14 +87,26 @@ function renderStoredAiResponse(msg) {
 }
 
 async function initializePanel() {
-  const [messages] = await Promise.all([
+  // Batch all storage reads into a single call
+  const [messages, stored] = await Promise.all([
     loadStoredMessages(),
-    loadStoredChatMessages(),
-    refreshCurrentTabUrl(),
+    chrome.storage.local.get([
+      'chatMessages',
+      'activePanelTab',
+      'currentLeadDetail',
+      'currentLeadId',
+      'currentLeadFacts',
+      'currentLeadMissingFields',
+    ]),
   ]);
+  // Restore chat state
+  chatMessages = Array.isArray(stored.chatMessages) ? stored.chatMessages : [];
+  activePanelTab = stored.activePanelTab === 'chat' ? 'chat' : 'call';
+
   renderStoredMessages(messages);
   renderStoredChatMessages();
   setActivePanelTab(activePanelTab, { persist: false });
+  await loadStoredLeadDetail();
 
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (response) {
@@ -111,21 +119,18 @@ async function initializePanel() {
 
 initializePanel();
 
-chrome.tabs.onActivated.addListener(() => {
-  refreshCurrentTabUrl();
-});
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url) {
-    refreshCurrentTabUrl();
-  }
-});
-
-chrome.windows.onFocusChanged.addListener((windowId) => {
-  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
-    refreshCurrentTabUrl();
-  }
-});
+if (leadIdForm) {
+  leadIdForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    fetchLeadDetailByInput().catch((err) => {
+      updateLeadDetailStatus(`Lead detail fetch failed: ${err.message}`, 'error');
+      leadFetchInFlight = false;
+      if (leadIdFetchBtn) {
+        leadIdFetchBtn.disabled = false;
+      }
+    });
+  });
+}
 
 callTabBtn.addEventListener('click', () => {
   setActivePanelTab('call');
@@ -143,6 +148,7 @@ toggleBtn.addEventListener('click', () => {
     if (response) {
       updateCaptureUI(response.active);
       updateAgentMicPauseUI(response.agentMicPaused, response.active);
+      updateCaptureModeUI(response.captureMode);
     }
   });
 });
@@ -225,26 +231,23 @@ modalClose.addEventListener('click', () => {
   summaryModal.classList.remove('active');
 });
 
-summaryModal.addEventListener('click', (e) => {
-  if (e.target === summaryModal) {
+summaryModal.addEventListener('click', (event) => {
+  if (event.target === summaryModal) {
     summaryModal.classList.remove('active');
   }
 });
 
-document.getElementById('mic-permission-btn').addEventListener('click', () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
-});
+const micPermissionBtn = document.getElementById('mic-permission-btn');
+if (micPermissionBtn) {
+  micPermissionBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
+  });
+}
 
 function updateCaptureUI(isActive) {
-  if (isActive) {
-    toggleBtn.textContent = 'Stop Capture';
-    toggleBtn.classList.add('active');
-    dot.classList.add('active');
-  } else {
-    toggleBtn.textContent = 'Start Capture';
-    toggleBtn.classList.remove('active');
-    dot.classList.remove('active');
-  }
+  toggleBtn.classList.toggle('active', Boolean(isActive));
+  toggleBtn.textContent = isActive ? 'Stop Capture' : 'Start Capture';
+  dot.classList.toggle('active', Boolean(isActive));
 }
 
 function updateAgentMicPauseUI(isPaused, isActive = true) {
@@ -258,82 +261,57 @@ function updateCaptureModeUI(mode) {
   captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
 }
 
-async function refreshCurrentTabUrl() {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const url = tab?.url || tab?.pendingUrl || '';
-    updateCurrentTabUrl(url);
-  } catch (err) {
-    updateCurrentTabUrl('');
-  }
-}
+async function loadStoredLeadDetail() {
+  const stored = await chrome.storage.local
+    .get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts', 'currentLeadMissingFields'])
+    .catch(() => ({}));
 
-function updateCurrentTabUrl(url) {
-  if (!currentTabUrlText || !currentTabUrl) {
+  latestLeadDetail = stored.currentLeadDetail || null;
+  latestLeadId = stored.currentLeadId || null;
+  latestLeadFacts = stored.currentLeadFacts || LeadDetailApi.buildLeadFacts(latestLeadDetail);
+  latestLeadMissingFields = stored.currentLeadMissingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+
+  if (leadIdInput && latestLeadId) {
+    leadIdInput.value = String(latestLeadId);
+  }
+
+  if (latestLeadDetail && latestLeadId) {
+    updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+    renderLeadDetailData(latestLeadDetail);
     return;
   }
 
-  const displayUrl = url || 'Current tab URL unavailable';
-  currentTabUrlText.textContent = displayUrl;
-  currentTabUrl.title = displayUrl;
-  scheduleLeadDetailLookup(url);
+  updateLeadDetailStatus('Enter a lead id and fetch details.');
+  renderLeadDetailData(null);
 }
 
-function buildLeadLookupKey(url) {
-  if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
-    return '';
-  }
-  const leadId = LeadDetailApi.extractLeadIdFromUrl(url) || '';
-  try {
-    const parsedUrl = new URL(url);
-    return `${parsedUrl.origin}${parsedUrl.pathname}?lead_id=${leadId}`;
-  } catch (err) {
-    return url;
-  }
-}
-
-function scheduleLeadDetailLookup(url) {
-  if (!leadDetailStatus) {
+async function fetchLeadDetailByInput() {
+  if (!leadIdInput || !leadDetailStatus) {
     return;
   }
 
-  const lookupKey = buildLeadLookupKey(url);
-  if (lookupKey && (lookupKey === lastLeadLookupKey || lookupKey === leadLookupInFlightKey)) {
+  const leadId = normalizeLeadIdInput(leadIdInput.value);
+  if (!leadId) {
+    updateLeadDetailStatus('Enter a valid numeric lead id.', 'error');
     return;
   }
 
-  clearTimeout(leadDetailLookupTimer);
-  leadDetailLookupTimer = setTimeout(() => {
-    refreshLeadDetailStatus(url).catch(() => {});
-  }, 250);
-}
+  if (leadFetchInFlight) {
+    return;
+  }
 
-async function refreshLeadDetailStatus(url) {
   const requestId = leadDetailRequestId + 1;
   leadDetailRequestId = requestId;
-  const lookupKey = buildLeadLookupKey(url);
-
-  if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
-    lastLeadLookupKey = '';
-    leadLookupInFlightKey = '';
-    updateLeadDetailStatus('Lead detail check will run on Ambak lead pages.');
-    latestLeadDetail = null;
-    latestLeadId = null;
-    latestLeadFacts = null;
-    renderLeadDetailData(null);
-    return;
+  leadFetchInFlight = true;
+  if (leadIdFetchBtn) {
+    leadIdFetchBtn.disabled = true;
   }
 
-  if (lookupKey && (lookupKey === lastLeadLookupKey || lookupKey === leadLookupInFlightKey)) {
-    return;
-  }
-
-  leadLookupInFlightKey = lookupKey;
-
-  updateLeadDetailStatus('Checking lead details from API...', 'loading');
+  updateLeadDetailStatus(`Fetching lead ${leadId} details...`, 'loading');
   renderLeadDetailData(null);
+
   const response = await new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', url }, (reply) => {
+    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', leadId }, (reply) => {
       resolve(reply || {});
     });
   });
@@ -342,35 +320,33 @@ async function refreshLeadDetailStatus(url) {
     return;
   }
 
-  if (response.error) {
-    leadLookupInFlightKey = '';
-    updateLeadDetailStatus(`Lead detail API check failed: ${response.error}`, 'error');
-    latestLeadDetail = null;
-    latestLeadId = null;
-    latestLeadFacts = null;
-    renderLeadDetailData(null);
-    return;
+  leadFetchInFlight = false;
+  if (leadIdFetchBtn) {
+    leadIdFetchBtn.disabled = false;
   }
-  if (response.skipped) {
-    leadLookupInFlightKey = '';
-    updateLeadDetailStatus(response.reason || 'Lead detail check skipped.');
+
+  if (response.error) {
+    updateLeadDetailStatus(`Lead detail fetch failed: ${response.error}`, 'error');
     latestLeadDetail = null;
     latestLeadId = null;
     latestLeadFacts = null;
+    latestLeadMissingFields = null;
     renderLeadDetailData(null);
     return;
   }
 
   latestLeadDetail = response.detail || null;
-  latestLeadId = response.leadId || null;
+  latestLeadId = response.leadId || leadId;
   latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
-  lastLeadLookupKey = lookupKey || buildLeadLookupKey(url);
-  leadLookupInFlightKey = '';
-  updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
-  renderLeadDetailData(response.detail);
+  latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  if (leadIdInput) {
+    leadIdInput.value = String(latestLeadId || leadId);
+  }
+  updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+  renderLeadDetailData(latestLeadDetail);
 }
 
-function formatLeadDetailStatus(leadId, detail) {
+function formatLeadDetailStatus(leadId, detail, missingFields = []) {
   const customer = detail?.customer || {};
   const leadDetails = detail?.lead_details || {};
   const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
@@ -385,6 +361,9 @@ function formatLeadDetailStatus(leadId, detail) {
   }
   if (loanAmount) {
     parts.push(`₹${loanAmount}`);
+  }
+  if (Array.isArray(missingFields)) {
+    parts.push(`${missingFields.length} missing/null fields`);
   }
   return parts.join(' · ');
 }
@@ -488,13 +467,13 @@ function renderStoredChatMessages() {
 
   for (const message of chatMessages) {
     chatLog.appendChild(
-      createChatMessageElement(message.role, message.content, false, message.details).element,
+      createChatMessageElement(message.role, message.content, false, message.details, message.actions).element,
     );
   }
   scrollChatToBottom();
 }
 
-function createChatMessageElement(role, content, loading = false, details = null) {
+function createChatMessageElement(role, content, loading = false, details = null, actions = null) {
   const el = document.createElement('div');
   el.className = `chat-message ${role === 'user' ? 'user' : 'assistant'}`;
   if (loading) {
@@ -516,7 +495,62 @@ function createChatMessageElement(role, content, loading = false, details = null
     el.appendChild(createKeyValueCard(details));
   }
 
+  if (actions?.type === 'lead_refresh_confirmation') {
+    el.appendChild(createLeadRefreshActions());
+  }
+
   return { element: el, text };
+}
+
+function createLeadRefreshActions() {
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'chat-actions';
+
+  const yesBtn = document.createElement('button');
+  yesBtn.type = 'button';
+  yesBtn.className = 'chat-action-btn primary';
+  yesBtn.textContent = 'Yes, refresh';
+  yesBtn.addEventListener('click', () => {
+    disableActionButtons(actionsEl);
+    resolveLeadRefreshActions(actionsEl).catch(() => {});
+    handleLeadRefreshConfirmation(true).catch((err) => {
+      addAssistantChatMessage(`Lead refresh failed: ${err.message}`);
+    });
+  });
+
+  const noBtn = document.createElement('button');
+  noBtn.type = 'button';
+  noBtn.className = 'chat-action-btn';
+  noBtn.textContent = 'No, same data';
+  noBtn.addEventListener('click', () => {
+    disableActionButtons(actionsEl);
+    resolveLeadRefreshActions(actionsEl).catch(() => {});
+    handleLeadRefreshConfirmation(false).catch((err) => {
+      addAssistantChatMessage(`Failed to continue: ${err.message}`);
+    });
+  });
+
+  actionsEl.appendChild(yesBtn);
+  actionsEl.appendChild(noBtn);
+  return actionsEl;
+}
+
+function disableActionButtons(container) {
+  container.querySelectorAll('button').forEach((button) => {
+    button.disabled = true;
+  });
+}
+
+async function resolveLeadRefreshActions(container) {
+  container.remove();
+  for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+    const message = chatMessages[index];
+    if (message?.actions?.type === 'lead_refresh_confirmation') {
+      message.actions = null;
+      break;
+    }
+  }
+  await persistChatMessages().catch(() => {});
 }
 
 function createKeyValueCard(details) {
@@ -547,17 +581,62 @@ function scrollChatToBottom() {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-async function sendChatMessage() {
+async function addAssistantChatMessage(content, actions = null) {
+  chatMessages.push({
+    role: 'assistant',
+    content,
+    timestamp: Date.now(),
+    actions,
+  });
+  chatLog.innerHTML = '';
+  renderStoredChatMessages();
+  await persistChatMessages().catch(() => {});
+}
+
+async function handleLeadRefreshConfirmation(shouldRefresh) {
+  if (!shouldRefresh) {
+    await sendChatMessage('No, same data');
+    return;
+  }
+
+  const leadId = latestLeadId || normalizeLeadIdInput(leadIdInput?.value);
+  if (!leadId) {
+    throw new Error('Lead id is required to refresh lead data.');
+  }
+
+  updateLeadDetailStatus(`Refreshing lead ${leadId} details...`, 'loading');
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', leadId }, (reply) => {
+      resolve(reply || {});
+    });
+  });
+  if (response.error) {
+    throw new Error(response.error);
+  }
+
+  latestLeadDetail = response.detail || null;
+  latestLeadId = response.leadId || leadId;
+  latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
+  latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+  renderLeadDetailData(latestLeadDetail);
+
+  await sendChatMessage('Yes, refreshed latest lead data. What is the next step?', { leadRefreshed: true });
+}
+
+async function sendChatMessage(textOverride = null, options = {}) {
   if (chatSending) {
     return;
   }
 
-  const text = chatInput.value.trim();
+  const text = (textOverride ?? chatInput.value).trim();
   if (!text) {
     return;
   }
 
-  chatInput.value = '';
+  if (textOverride === null) {
+    chatInput.value = '';
+  }
   const userMessage = { role: 'user', content: text, timestamp: Date.now() };
   chatMessages.push(userMessage);
   chatLog.innerHTML = '';
@@ -577,23 +656,36 @@ async function sendChatMessage() {
       content: item.content,
     }));
     const storedLead = await chrome.storage.local
-      .get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts'])
+      .get(['currentLeadDetail', 'currentLeadId'])
       .catch(() => ({}));
     const leadDetailForChat = latestLeadDetail || storedLead.currentLeadDetail || null;
-    const leadFactsForChat = latestLeadFacts || storedLead.currentLeadFacts || LeadDetailApi.buildLeadFacts(leadDetailForChat);
+    const leadIdForChat = latestLeadId || storedLead.currentLeadId || normalizeLeadIdInput(leadIdInput?.value) || null;
+    const chatPayload = {
+      type: 'CHAT_SEND',
+      message: text,
+      history,
+      lead_id: leadIdForChat,
+      lead_refreshed: Boolean(options.leadRefreshed),
+    };
+
+    if (leadDetailForChat) {
+      chatPayload.lead_detail = leadDetailForChat;
+      chatPayload.lead_facts = LeadDetailApi.buildLeadFacts(leadDetailForChat);
+      chatPayload.lead_missing_fields = LeadDetailApi.buildLeadMissingFields(leadDetailForChat);
+    }
+
+    console.group('[LeadDebug][sidepanel] chat payload');
+    console.log('lead_id', chatPayload.lead_id);
+    console.log('has lead_detail', Boolean(chatPayload.lead_detail));
+    console.log('lead_detail keys', chatPayload.lead_detail ? Object.keys(chatPayload.lead_detail).slice(0, 30) : []);
+    console.log('lead_facts count', chatPayload.lead_facts ? Object.keys(chatPayload.lead_facts).length : 0);
+    console.log('lead_facts sample', chatPayload.lead_facts ? Object.fromEntries(Object.entries(chatPayload.lead_facts).slice(0, 30)) : {});
+    console.log('lead_missing_fields count', Array.isArray(chatPayload.lead_missing_fields) ? chatPayload.lead_missing_fields.length : 0);
+    console.log('lead_missing_fields sample', Array.isArray(chatPayload.lead_missing_fields) ? chatPayload.lead_missing_fields.slice(0, 30) : []);
+    console.groupEnd();
 
     const response = await new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        {
-          type: 'CHAT_SEND',
-          message: text,
-          history,
-          lead_id: latestLeadId || storedLead.currentLeadId || null,
-          lead_detail: leadDetailForChat,
-          lead_facts: leadFactsForChat,
-        },
-        (reply) => resolve(reply),
-      );
+      chrome.runtime.sendMessage(chatPayload, (reply) => resolve(reply));
     });
 
     const replyText = response?.reply?.reply || response?.reply || response?.text || '';
@@ -603,10 +695,15 @@ async function sendChatMessage() {
 
     assistantBubble.element.classList.remove('loading');
     assistantBubble.text.textContent = replyText;
+    const actions = response?.needs_lead_refresh_confirmation ? { type: 'lead_refresh_confirmation' } : null;
+    if (actions) {
+      assistantBubble.element.appendChild(createLeadRefreshActions());
+    }
     chatMessages.push({
       role: 'assistant',
       content: replyText,
       timestamp: Date.now(),
+      actions,
     });
     await persistChatMessages().catch(() => {});
   } catch (err) {
@@ -631,7 +728,7 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
     const canMergePending =
       pendingMergeCard
       && pendingMergeCard.speakerLabel === speakerLabel
-      && now - pendingMergeAt <= 1800;
+      && now - pendingMergeAt <= CONFIG.UTTERANCE_MERGE_WINDOW_MS;
 
     if (!currentCard && transcript.trim()) {
       if (canMergePending) {

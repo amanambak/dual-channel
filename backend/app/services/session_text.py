@@ -3,10 +3,7 @@ import time
 from dataclasses import dataclass
 
 from app.models.session import SessionState
-
-
-NORMALIZE_REGEX_1 = re.compile(r"\s+")
-NORMALIZE_REGEX_2 = re.compile(r"[^a-z0-9 ]+")
+from app.services.text_utils import normalize_text
 
 
 @dataclass(frozen=True)
@@ -14,12 +11,6 @@ class TurnActionDecision:
     run_extraction: bool
     run_reply: bool
     reason: str
-
-
-def normalize_text(text: str) -> str:
-    normalized = NORMALIZE_REGEX_1.sub(" ", text.lower()).strip()
-    normalized = NORMALIZE_REGEX_2.sub("", normalized)
-    return normalized.strip()
 
 
 def normalize_confidence(confidence: float | None) -> float:

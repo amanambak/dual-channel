@@ -1,6 +1,8 @@
 import re
 from collections import defaultdict
 
+from app.services.text_utils import normalize_text
+
 
 class SchemaFieldLogic:
     def __init__(
@@ -75,9 +77,6 @@ class SchemaFieldLogic:
             add_keywords(["yes", "no", "haan", "nahi"])
 
         return triggers
-
-    def normalize_text(self, text: str) -> str:
-        return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
     def trigger_matches(self, normalized_text: str, trigger: str) -> bool:
         if not trigger:
