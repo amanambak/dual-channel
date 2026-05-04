@@ -11,10 +11,15 @@ from pydantic.types import SecretStr
 
 from app.core.config import get_settings
 from app.services.lead_detail_context import build_lead_detail_chat_context
+from app.services.lead_detail_context import build_lead_context
 from app.services.lead_detail_context import build_lead_field_index_prompt
 from app.services.lead_detail_context import discover_lead_field_paths
 from app.services.lead_detail_context import execute_lead_query_plan
+from app.services.lead_detail_context import find_direct_dre_document_answer
+from app.services.lead_detail_context import find_direct_lead_detail_answer
 from app.services.lead_detail_context import format_priority_missing_context
+from app.services.lead_detail_context import looks_like_document_question
+from app.services.lead_detail_context import normalize_lead_detail_payload
 from app.services.lead_detail_context import sanitize_lead_query_plan
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
@@ -56,9 +61,11 @@ Use the provided context to answer the user's question directly in concise, poli
 
 CRITICAL RULES:
 1. If relevant context is provided, prioritize it for your answer.
-2. If you don't know the answer from the context, state it politely but still offer general help.
-3. Do not mention internal implementation details or source filenames.
-4. Use Roman script only. Never use Devanagari.
+2. If the user asks about lead documents, answer specifically from the "DRE document status" section.
+3. For document questions, do not invent uploaded or missing documents. If DRE document status is unavailable, say that clearly and include the provided error if present.
+4. If you don't know the answer from the context, state it politely but still offer general help.
+5. Do not mention internal implementation details or source filenames.
+6. Use Roman script only. Never use Devanagari.
 """
 
 
@@ -444,11 +451,11 @@ def build_deterministic_lead_query_plan(message: str) -> dict | None:
     asks_missing = bool(tokens & {"missing", "pending", "empty", "blank", "null"})
     asks_priority = bool(tokens & {"priority", "high", "highest", "top"})
     asks_documents = bool(tokens & {"doc", "docs", "document", "documents"})
-    if asks_missing and asks_priority and not asks_documents:
+    if asks_missing and not asks_documents:
         return {
             "action": "missing_fields",
-            "priority_only": True,
-            **_priority_missing_filters(normalized),
+            "priority_only": asks_priority,
+            **(_priority_missing_filters(normalized) if asks_priority else {"fields": [], "confidence": 0.9, "scope_hint": None}),
         }
 
     return None
@@ -714,6 +721,10 @@ class LLMService:
         lead_facts: dict | None = None,
         lead_missing_fields: list[dict] | None = None,
         lead_refreshed: bool = False,
+        lead_dre_documents: object | None = None,
+        lead_document_status: object | None = None,
+        lead_dre_document_error: str | None = None,
+        lead_context: dict | None = None,
         model_name: str | None = None,
     ) -> str:
         result = await self.generate_chat_reply_payload(
@@ -724,6 +735,10 @@ class LLMService:
             lead_facts=lead_facts,
             lead_missing_fields=lead_missing_fields,
             lead_refreshed=lead_refreshed,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_context=lead_context,
             model_name=model_name,
         )
         return str(result.get("reply") or "")
@@ -738,12 +753,58 @@ class LLMService:
         lead_facts: dict | None = None,
         lead_missing_fields: list[dict] | None = None,
         lead_refreshed: bool = False,
+        lead_dre_documents: object | None = None,
+        lead_document_status: object | None = None,
+        lead_dre_document_error: str | None = None,
+        lead_context: dict | None = None,
         model_name: str | None = None,
     ) -> dict:
         timings: dict[str, float] = {}
         overall_start = time.perf_counter()
-        searchable_lead_detail = combine_lead_search_sources(lead_detail, lead_facts)
+        normalized_lead_detail = normalize_lead_detail_payload(lead_detail)
+        canonical_lead_context = lead_context or build_lead_context(
+            lead_id=lead_id,
+            lead_detail=normalized_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_document_status=lead_document_status,
+            lead_facts=lead_facts,
+        )
+        searchable_lead_detail = combine_lead_search_sources(
+            normalized_lead_detail or canonical_lead_context.get("lead_detail"),
+            canonical_lead_context.get("facts") or lead_facts,
+        )
         previous_next_step = _last_next_step_answer(history)
+        is_document_question = looks_like_document_question(message)
+
+        direct_document_answer = find_direct_dre_document_answer(
+            message,
+            lead_detail=normalized_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_context=canonical_lead_context,
+        )
+        if direct_document_answer:
+            logger.info(
+                "Lead chat answered directly from document context: message_len=%d total_ms=%.2f",
+                len(message),
+                (time.perf_counter() - overall_start) * 1000.0,
+            )
+            return {"reply": direct_document_answer}
+
+        direct_lead_answer = find_direct_lead_detail_answer(
+            message,
+            searchable_lead_detail,
+            lead_context=canonical_lead_context,
+        )
+        if direct_lead_answer:
+            logger.info(
+                "Lead chat answered directly from loaded lead context: message_len=%d total_ms=%.2f",
+                len(message),
+                (time.perf_counter() - overall_start) * 1000.0,
+            )
+            return {"reply": direct_lead_answer}
 
         if is_no_refresh_confirmation(message) and previous_next_step and _last_assistant_asked_refresh_confirmation(history):
             return {
@@ -814,18 +875,28 @@ class LLMService:
 
         # 1. Retrieve relevant context
         retrieval_start = time.perf_counter()
-        docs = await self.rag_service.hybrid_search(message)
-        timings["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000.0
-        self.rag_service.log_retrieved_chunks(message, docs, timings["retrieval_ms"])
+        if is_document_question:
+            docs = []
+            timings["retrieval_ms"] = 0.0
+            context_str = "No relevant policy documents needed for this lead document question."
+        else:
+            docs = await self.rag_service.hybrid_search(message)
+            timings["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000.0
+            self.rag_service.log_retrieved_chunks(message, docs, timings["retrieval_ms"])
 
-        context_parts = []
-        for doc in docs:
-            context_parts.append(doc.page_content)
-        
-        context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
+            context_parts = []
+            for doc in docs:
+                context_parts.append(doc.page_content)
+
+            context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
         lead_context = build_lead_detail_chat_context(
             lead_id=lead_id,
             lead_detail=searchable_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_context=canonical_lead_context,
+            document_only=is_document_question,
         )
         
         # 2. Build prompt with context

@@ -51,6 +51,8 @@ def looks_like_noise_or_filler(normalized: str) -> bool:
         return True
     if normalized in filler_only:
         return True
+    if set(tokens).issubset(filler_only):
+        return True
     if len(tokens) >= 4 and len(set(tokens)) == 1:
         return True
     return False

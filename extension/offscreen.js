@@ -7,6 +7,8 @@ let mediaStream;
 let micStream;
 let source;
 let micSource;
+let workletCustomer = null;
+let workletAgent = null;
 let backendSocket;
 let currentSessionId = null;
 let sendIntervalCustomer = null;
@@ -140,8 +142,11 @@ function createChannelSender(channelByte, buffer, intervalMs = 100, shouldSkip =
 async function setupDualChannelWorklets(tabGain, micGain) {
   // Worklet for tab audio (channel 0 - customer)
   await audioContext.audioWorklet.addModule('capture-worklet.js');
+  if (audioContext.state === 'suspended') {
+    await audioContext.resume();
+  }
 
-  const workletCustomer = new AudioWorkletNode(audioContext, 'capture-worklet');
+  workletCustomer = new AudioWorkletNode(audioContext, 'capture-worklet');
   tabGain.connect(workletCustomer);
   const bufferCustomer = [];
   workletCustomer.port.onmessage = (event) => { bufferCustomer.push(event.data); };
@@ -149,7 +154,7 @@ async function setupDualChannelWorklets(tabGain, micGain) {
 
   // Worklet for microphone (channel 1 - agent)
   if (micGain) {
-    const workletAgent = new AudioWorkletNode(audioContext, 'capture-worklet');
+    workletAgent = new AudioWorkletNode(audioContext, 'capture-worklet');
     micGain.connect(workletAgent);
     const bufferAgent = [];
     workletAgent.port.onmessage = (event) => { bufferAgent.push(event.data); };
@@ -191,6 +196,17 @@ async function stopCapture() {
   currentSessionId = null;
 
   // Disconnect tab audio nodes
+  if (workletCustomer) {
+    workletCustomer.port.onmessage = null;
+    workletCustomer.disconnect();
+    workletCustomer = null;
+  }
+  if (workletAgent) {
+    workletAgent.port.onmessage = null;
+    workletAgent.disconnect();
+    workletAgent = null;
+  }
+
   if (source) {
     source.disconnect();
     source = null;
@@ -247,10 +263,12 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
     let opened = false;
 
     socket.onopen = () => {
-      const params = CONFIG.DEEPGRAM_PARAMS || {};
+      const params = { ...(CONFIG.DEEPGRAM_PARAMS || {}) };
       params.diarize = params.diarize || 'true';
       params.diarize_version = params.diarize_version || '2023-03-31';
-      params.multichannel = hasMicChannel ? 'true' : 'false';
+      // The extension sends each speaker as a separate mono Deepgram stream.
+      // Do not enable Deepgram multichannel for these per-channel connections.
+      params.multichannel = 'false';
       socket.send(JSON.stringify({
         type: 'start_session',
         config: {

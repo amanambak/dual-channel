@@ -6,6 +6,7 @@ let currentCard = null;
 let pendingMergeCard = null;
 let pendingMergeAt = 0;
 const aiCards = new Map();
+const committedUtteranceIds = new Set();
 const container = document.getElementById('transcript-container');
 const callTabBtn = document.getElementById('call-tab');
 const chatTabBtn = document.getElementById('chat-tab');
@@ -29,6 +30,7 @@ const leadIdForm = document.getElementById('lead-id-form');
 const leadIdInput = document.getElementById('lead-id-input');
 const leadIdFetchBtn = document.getElementById('lead-id-fetch-btn');
 const leadDetailStatus = document.getElementById('lead-detail-status');
+const leadDetailToggleBtn = document.getElementById('lead-detail-toggle-btn');
 const leadDetailData = document.getElementById('lead-detail-data');
 
 let activePanelTab = 'call';
@@ -39,8 +41,10 @@ let latestLeadDetail = null;
 let latestLeadId = null;
 let latestLeadFacts = null;
 let latestLeadMissingFields = null;
+let latestLeadContext = null;
 let leadDetailRequestId = 0;
 let leadFetchInFlight = false;
+let leadDetailsCollapsed = false;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -97,11 +101,16 @@ async function initializePanel() {
       'currentLeadId',
       'currentLeadFacts',
       'currentLeadMissingFields',
+      'currentLeadContext',
+      'currentLeadDocumentStatus',
+      'currentLeadDreDocumentError',
+      'leadDetailsCollapsed',
     ]),
   ]);
   // Restore chat state
   chatMessages = Array.isArray(stored.chatMessages) ? stored.chatMessages : [];
   activePanelTab = stored.activePanelTab === 'chat' ? 'chat' : 'call';
+  leadDetailsCollapsed = Boolean(stored.leadDetailsCollapsed);
 
   renderStoredMessages(messages);
   renderStoredChatMessages();
@@ -129,6 +138,12 @@ if (leadIdForm) {
         leadIdFetchBtn.disabled = false;
       }
     });
+  });
+}
+
+if (leadDetailToggleBtn) {
+  leadDetailToggleBtn.addEventListener('click', () => {
+    setLeadDetailsCollapsed(!leadDetailsCollapsed);
   });
 }
 
@@ -263,13 +278,22 @@ function updateCaptureModeUI(mode) {
 
 async function loadStoredLeadDetail() {
   const stored = await chrome.storage.local
-    .get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts', 'currentLeadMissingFields'])
+    .get([
+      'currentLeadDetail',
+      'currentLeadId',
+      'currentLeadFacts',
+      'currentLeadMissingFields',
+      'currentLeadContext',
+      'currentLeadDocumentStatus',
+      'currentLeadDreDocumentError',
+    ])
     .catch(() => ({}));
 
   latestLeadDetail = stored.currentLeadDetail || null;
   latestLeadId = stored.currentLeadId || null;
   latestLeadFacts = stored.currentLeadFacts || LeadDetailApi.buildLeadFacts(latestLeadDetail);
   latestLeadMissingFields = stored.currentLeadMissingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadContext = stored.currentLeadContext || null;
 
   if (leadIdInput && latestLeadId) {
     leadIdInput.value = String(latestLeadId);
@@ -277,7 +301,12 @@ async function loadStoredLeadDetail() {
 
   if (latestLeadDetail && latestLeadId) {
     updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
-    renderLeadDetailData(latestLeadDetail);
+    renderLeadDetailData(
+      latestLeadDetail,
+      latestLeadContext,
+      stored.currentLeadDocumentStatus || null,
+      stored.currentLeadDreDocumentError || '',
+    );
     return;
   }
 
@@ -331,6 +360,7 @@ async function fetchLeadDetailByInput() {
     latestLeadId = null;
     latestLeadFacts = null;
     latestLeadMissingFields = null;
+    latestLeadContext = null;
     renderLeadDetailData(null);
     return;
   }
@@ -339,23 +369,20 @@ async function fetchLeadDetailByInput() {
   latestLeadId = response.leadId || leadId;
   latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
   latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadContext = response.leadContext || null;
   if (leadIdInput) {
     leadIdInput.value = String(latestLeadId || leadId);
   }
   updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
-  renderLeadDetailData(latestLeadDetail);
+  renderLeadDetailData(latestLeadDetail, latestLeadContext, response.documentStatus || null, response.dreDocumentError || '');
 }
 
 function formatLeadDetailStatus(leadId, detail, missingFields = []) {
-  const customer = detail?.customer || {};
-  const leadDetails = detail?.lead_details || {};
-  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
-  const statusName = detail?.status_info?.statuslang?.status_name || '';
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail) || {};
+  const leadDetails = leadRecord?.lead_details || {};
+  const statusName = leadRecord?.status_info?.statuslang?.status_name || '';
   const loanAmount = leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '';
   const parts = [`Lead ${leadId} details loaded`];
-  if (customerName) {
-    parts.push(customerName);
-  }
   if (statusName) {
     parts.push(statusName);
   }
@@ -375,28 +402,99 @@ function updateLeadDetailStatus(message, state = '') {
   leadDetailStatus.classList.toggle('loading', state === 'loading');
 }
 
-function renderLeadDetailData(detail) {
+function setLeadDetailsCollapsed(collapsed, options = {}) {
+  leadDetailsCollapsed = Boolean(collapsed);
+  if (leadDetailData) {
+    leadDetailData.classList.toggle('collapsed', leadDetailsCollapsed);
+  }
+  if (leadDetailToggleBtn) {
+    leadDetailToggleBtn.textContent = leadDetailsCollapsed ? 'Show details' : 'Hide details';
+    leadDetailToggleBtn.setAttribute('aria-expanded', String(!leadDetailsCollapsed));
+  }
+  if (options.persist !== false) {
+    chrome.storage.local.set({ leadDetailsCollapsed }).catch(() => {});
+  }
+}
+
+function updateLeadDetailToggle(hasDetail) {
+  if (!leadDetailToggleBtn) {
+    return;
+  }
+  leadDetailToggleBtn.classList.toggle('active', Boolean(hasDetail));
+  leadDetailToggleBtn.disabled = !hasDetail;
+  setLeadDetailsCollapsed(hasDetail ? leadDetailsCollapsed : false, { persist: hasDetail });
+}
+
+function getDreStatus(leadContext) {
+  return leadContext?.dre_status || '';
+}
+
+function buildDocumentBuckets(documentStatus) {
+  const toRows = (values) => (Array.isArray(values) ? values : [])
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map((name) => ({ name: String(name).trim() }));
+
+  return {
+    uploaded: toRows(documentStatus?.uploaded_documents),
+    pending: toRows(documentStatus?.missing_documents),
+  };
+}
+
+function appendDocumentList(parent, title, docs, state) {
+  const section = document.createElement('div');
+  section.className = 'lead-document-group';
+
+  const heading = document.createElement('div');
+  heading.className = 'lead-document-heading';
+  heading.textContent = `${title} (${docs.length})`;
+  section.appendChild(heading);
+
+  if (!docs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'lead-document-empty';
+    empty.textContent = 'None';
+    section.appendChild(empty);
+  } else {
+    docs.forEach((doc) => {
+      const row = document.createElement('div');
+      row.className = `lead-document-item ${state}`;
+      const dotEl = document.createElement('span');
+      dotEl.className = 'lead-document-dot';
+      const label = document.createElement('span');
+      label.textContent = doc.name;
+      row.appendChild(dotEl);
+      row.appendChild(label);
+      section.appendChild(row);
+    });
+  }
+
+  parent.appendChild(section);
+}
+
+function renderLeadDetailData(detail, leadContext = null, documentStatus = null, dreDocumentError = '') {
   if (!leadDetailData) {
     return;
   }
   leadDetailData.innerHTML = '';
   leadDetailData.classList.toggle('active', Boolean(detail));
+  updateLeadDetailToggle(Boolean(detail));
   if (!detail) {
     return;
   }
 
-  const customer = detail.customer || {};
-  const leadDetails = detail.lead_details || {};
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail) || {};
+  const leadDetails = leadRecord.lead_details || {};
   const bankName = leadDetails.bank?.banklang?.bank_name || '';
+  const backendDocumentStatus = leadContext?.document_status || documentStatus;
+  const backendDocumentError = leadContext?.document_error || dreDocumentError;
+  const dreStatus = getDreStatus(leadContext);
   const summary = {
-    Lead: detail.id || leadDetails.lead_id || '',
-    Customer: [customer.first_name, customer.last_name].filter(Boolean).join(' '),
-    Mobile: customer.mobile || '',
-    Email: customer.email || '',
-    Status: detail.status_info?.statuslang?.status_name || '',
-    Substatus: detail.sub_status_info?.substatuslang?.sub_status_name || '',
+    Lead: leadContext?.lead_id || leadRecord.id || leadDetails.lead_id || '',
+    Status: leadRecord.status_info?.statuslang?.status_name || '',
+    Substatus: leadRecord.sub_status_info?.substatuslang?.sub_status_name || '',
     Bank: bankName,
     Amount: leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '',
+    DRE: dreStatus,
   };
 
   const summaryEl = document.createElement('div');
@@ -428,11 +526,36 @@ function renderLeadDetailData(detail) {
   rawSummary.textContent = 'View raw loaded data';
 
   const rawJson = document.createElement('pre');
-  rawJson.textContent = JSON.stringify(detail, null, 2);
+  rawJson.textContent = JSON.stringify({
+    dre_status: dreStatus || null,
+    lead_context: leadContext,
+    lead_detail: detail,
+    lead_document_status: backendDocumentStatus,
+  }, null, 2);
+
+  const docBuckets = buildDocumentBuckets(backendDocumentStatus);
+  const documentsEl = document.createElement('div');
+  documentsEl.className = 'lead-document-section';
+
+  const documentsTitle = document.createElement('div');
+  documentsTitle.className = 'lead-document-title';
+  documentsTitle.textContent = 'DRE Documents';
+  documentsEl.appendChild(documentsTitle);
+
+  if (backendDocumentError) {
+    const error = document.createElement('div');
+    error.className = 'lead-document-error';
+    error.textContent = backendDocumentError;
+    documentsEl.appendChild(error);
+  }
+
+  appendDocumentList(documentsEl, 'Uploaded', docBuckets.uploaded, 'uploaded');
+  appendDocumentList(documentsEl, 'Pending', docBuckets.pending, 'pending');
 
   rawDetails.appendChild(rawSummary);
   rawDetails.appendChild(rawJson);
   leadDetailData.appendChild(summaryEl);
+  leadDetailData.appendChild(documentsEl);
   leadDetailData.appendChild(rawDetails);
 }
 
@@ -618,8 +741,9 @@ async function handleLeadRefreshConfirmation(shouldRefresh) {
   latestLeadId = response.leadId || leadId;
   latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
   latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadContext = response.leadContext || null;
   updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
-  renderLeadDetailData(latestLeadDetail);
+  renderLeadDetailData(latestLeadDetail, latestLeadContext, response.documentStatus || null, response.dreDocumentError || '');
 
   await sendChatMessage('Yes, refreshed latest lead data. What is the next step?', { leadRefreshed: true });
 }
@@ -656,16 +780,28 @@ async function sendChatMessage(textOverride = null, options = {}) {
       content: item.content,
     }));
     const storedLead = await chrome.storage.local
-      .get(['currentLeadDetail', 'currentLeadId'])
+      .get([
+        'currentLeadDetail',
+        'currentLeadId',
+        'currentLeadContext',
+        'currentLeadDreDocuments',
+        'currentLeadDreDocumentError',
+        'currentLeadDocumentStatus',
+      ])
       .catch(() => ({}));
     const leadDetailForChat = latestLeadDetail || storedLead.currentLeadDetail || null;
     const leadIdForChat = latestLeadId || storedLead.currentLeadId || normalizeLeadIdInput(leadIdInput?.value) || null;
+    const leadContextForChat = latestLeadContext || storedLead.currentLeadContext || null;
     const chatPayload = {
       type: 'CHAT_SEND',
       message: text,
       history,
       lead_id: leadIdForChat,
       lead_refreshed: Boolean(options.leadRefreshed),
+      lead_context: leadContextForChat,
+      lead_dre_documents: storedLead.currentLeadDreDocuments || null,
+      lead_dre_document_error: storedLead.currentLeadDreDocumentError || null,
+      lead_document_status: storedLead.currentLeadDocumentStatus || leadContextForChat?.document_status || null,
     };
 
     if (leadDetailForChat) {
@@ -682,6 +818,8 @@ async function sendChatMessage(textOverride = null, options = {}) {
     console.log('lead_facts sample', chatPayload.lead_facts ? Object.fromEntries(Object.entries(chatPayload.lead_facts).slice(0, 30)) : {});
     console.log('lead_missing_fields count', Array.isArray(chatPayload.lead_missing_fields) ? chatPayload.lead_missing_fields.length : 0);
     console.log('lead_missing_fields sample', Array.isArray(chatPayload.lead_missing_fields) ? chatPayload.lead_missing_fields.slice(0, 30) : []);
+    console.log('has lead_context', Boolean(chatPayload.lead_context));
+    console.log('has DRE documents', Boolean(chatPayload.lead_dre_documents));
     console.groupEnd();
 
     const response = await new Promise((resolve) => {
@@ -698,6 +836,9 @@ async function sendChatMessage(textOverride = null, options = {}) {
     const actions = response?.needs_lead_refresh_confirmation ? { type: 'lead_refresh_confirmation' } : null;
     if (actions) {
       assistantBubble.element.appendChild(createLeadRefreshActions());
+    }
+    if (response?.lead_context) {
+      latestLeadContext = response.lead_context;
     }
     chatMessages.push({
       role: 'assistant',
@@ -765,6 +906,9 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
 
   AI_RESPONSE_CHUNK(message) {
     const { utteranceId, text, isDone, finalText } = message;
+    if (isDone && !text && !finalText && !aiCards.has(utteranceId)) {
+      return;
+    }
     let aiCard = aiCards.get(utteranceId);
     if (!aiCard) {
       collapseOtherAiCards(utteranceId);
@@ -795,6 +939,10 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
     }
   },
 
+  UTTERANCE_COMMITTED(message) {
+    renderCommittedUtterance(message);
+  },
+
   API_ERROR(message) { addErrorToContainer(message.message, message.source); },
 };
 
@@ -810,6 +958,7 @@ function scrollToBottom() {
 function createUtteranceCard(id, speakerLabel = 'Customer') {
   const el = document.createElement('div');
   el.className = 'utterance-card';
+  el.dataset.utteranceId = id;
   const badge = document.createElement('div');
   badge.className = `speaker-tag ${speakerLabel === 'Agent' ? 'agent' : 'customer'}`;
   badge.textContent = speakerLabel;
@@ -823,6 +972,67 @@ function createUtteranceCard(id, speakerLabel = 'Customer') {
   el.appendChild(badge);
   el.appendChild(textWrap);
   return { element: el, stable, interim, id, badge, speakerLabel };
+}
+
+function normalizeDisplayText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function cardHasCommittedText(card, text) {
+  if (!card || !text) {
+    return false;
+  }
+  return normalizeDisplayText(card.stable?.textContent).includes(text);
+}
+
+function renderCommittedUtterance(message) {
+  const text = normalizeDisplayText(message.text);
+  if (!text) {
+    return;
+  }
+
+  const utteranceId = message.utteranceId || `committed-${Date.now()}-${Math.random()}`;
+  if (committedUtteranceIds.has(utteranceId)) {
+    return;
+  }
+  committedUtteranceIds.add(utteranceId);
+
+  const speakerLabel = resolveSpeakerLabel(message.speaker);
+  if (cardHasCommittedText(currentCard, text) || cardHasCommittedText(pendingMergeCard, text)) {
+    if (currentCard) {
+      currentCard.element.dataset.utteranceId = utteranceId;
+      finalizeCard(currentCard);
+      pendingMergeCard = currentCard;
+      pendingMergeAt = Date.now();
+      currentCard = null;
+    }
+    return;
+  }
+
+  const existingCards = Array.from(container.querySelectorAll('.utterance-card')).slice(-4);
+  if (existingCards.some((el) => normalizeDisplayText(el.textContent).includes(text))) {
+    return;
+  }
+
+  if (currentCard && currentCard.speakerLabel === speakerLabel) {
+    currentCard.stable.textContent = text;
+    currentCard.interim.textContent = '';
+    currentCard.element.dataset.utteranceId = utteranceId;
+    finalizeCard(currentCard);
+    pendingMergeCard = currentCard;
+    pendingMergeAt = Date.now();
+    currentCard = null;
+    scrollToBottom();
+    return;
+  }
+
+  const card = createUtteranceCard(utteranceId, speakerLabel);
+  card.stable.textContent = text;
+  finalizeCard(card);
+  container.appendChild(card.element);
+  pendingMergeCard = card;
+  pendingMergeAt = Date.now();
+  scrollToBottom();
 }
 
 function updateInterimInCard(card, text) {

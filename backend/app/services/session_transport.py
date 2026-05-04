@@ -180,6 +180,13 @@ async def handle_deepgram_message(session, data: dict) -> None:
         if is_final and transcript.strip():
             confidence = metadata["confidence"]
             if should_capture_final_segment(transcript.strip(), confidence):
+                if (
+                    session.state.current_segments
+                    and session.state.current_segments[0][1] != speaker
+                ):
+                    session.finalized_segments = True
+                    session._cancel_finalize_task()
+                    await session.finalize_utterance()
                 session.state.current_segments.append((transcript.strip(), speaker))
                 session.current_segment_confidences.append(
                     normalize_confidence(confidence)
@@ -187,12 +194,13 @@ async def handle_deepgram_message(session, data: dict) -> None:
                 session.finalized_segments = True
                 session._schedule_finalize()
 
-        if metadata["speech_final"]:
+        if metadata["speech_final"] and session.state.current_segments:
             session._schedule_finalize()
 
     if data.get("type") == "UtteranceEnd":
         await session.send_json({"type": "utterance_end"})
-        session._schedule_finalize()
+        if session.state.current_segments:
+            session._schedule_finalize()
 
 
 def extract_primary_alternative(data: dict) -> dict:

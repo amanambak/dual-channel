@@ -72,9 +72,22 @@
       flex: 1;
       min-height: 0;
       flex-direction: column;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     .view.active {
       display: flex;
+    }
+    .view::-webkit-scrollbar {
+      width: 10px;
+    }
+    .view::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .view::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.22);
+      border-radius: 999px;
+      border: 2px solid rgba(9, 17, 31, 0.85);
     }
     .header {
       display: flex;
@@ -189,6 +202,28 @@
       border-color: rgba(125, 211, 252, 0.24);
       color: var(--accent);
     }
+    .lead-detail-toggle {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      border: 1px solid rgba(125, 211, 252, 0.22);
+      border-radius: 10px;
+      background: rgba(9, 17, 31, 0.42);
+      color: var(--accent);
+      font-size: 0.74rem;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .lead-detail-toggle.active {
+      display: flex;
+    }
+    .lead-detail-toggle:hover,
+    .lead-detail-toggle:focus-visible {
+      border-color: rgba(125, 211, 252, 0.45);
+      color: var(--text);
+      outline: none;
+    }
     .lead-detail-data {
       display: none;
       padding: 10px 11px;
@@ -203,6 +238,9 @@
     }
     .lead-detail-data.active {
       display: block;
+    }
+    .lead-detail-data.collapsed {
+      display: none;
     }
     .lead-detail-summary {
       display: grid;
@@ -225,6 +263,59 @@
     .lead-detail-value {
       color: var(--text);
       overflow-wrap: anywhere;
+    }
+    .lead-document-section {
+      display: grid;
+      gap: 9px;
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 10px;
+      background: rgba(9, 17, 31, 0.36);
+    }
+    .lead-document-title {
+      color: var(--text);
+      font-weight: 900;
+      font-size: 0.78rem;
+    }
+    .lead-document-group {
+      display: grid;
+      gap: 5px;
+    }
+    .lead-document-heading {
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .lead-document-item {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .lead-document-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted-strong);
+    }
+    .lead-document-item.uploaded .lead-document-dot {
+      background: var(--success);
+    }
+    .lead-document-item.pending .lead-document-dot {
+      background: var(--accent-warm);
+    }
+    .lead-document-empty,
+    .lead-document-error {
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+    .lead-document-error {
+      color: #fecaca;
     }
     .lead-detail-json summary {
       cursor: pointer;
@@ -396,7 +487,8 @@
       border-color: rgba(255, 107, 122, 0.16);
     }
     #transcript-container {
-      flex-grow: 1;
+      flex: 1 0 180px;
+      min-height: 180px;
       overflow-y: auto;
       padding: 14px;
       display: flex;
@@ -972,6 +1064,7 @@
         </form>
       </div>
       <div id="lead-detail-status" class="lead-detail-status">Enter a lead id and fetch details.</div>
+      <button id="lead-detail-toggle-btn" class="lead-detail-toggle" type="button" aria-expanded="true">Hide details</button>
       <div id="lead-detail-data" class="lead-detail-data"></div>
       <div class="capture-controls">
         <button id="toggle-btn" class="control-btn">Start Capture</button>

@@ -85,7 +85,11 @@ chrome.runtime.onInstalled.addListener(() => {
     isAgentMicPaused: false,
     messages: [],
     currentSessionId: null,
-    captureMode: 'gmeet'
+    captureMode: 'gmeet',
+    currentLeadContext: null,
+    currentLeadDocumentStatus: null,
+    currentLeadDreDocuments: null,
+    currentLeadDreDocumentError: null
   });
   isCapturing = false;
   isAgentMicPaused = false;
@@ -261,6 +265,10 @@ function maskAuthTokenForLog(token) {
   return `${text.slice(0, 8)}...${text.slice(-6)}`;
 }
 
+function getPageAccessToken(pageContext) {
+  return pageContext?.accessToken || pageContext?.token || '';
+}
+
 async function getAmbakAuthContext() {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const candidateTabs = [];
@@ -289,6 +297,70 @@ async function getAmbakAuthContext() {
   throw new Error('Open any Ambak page where you are logged in so the auth token can be read.');
 }
 
+async function fetchCustomerDreDocuments({ detail, leadId, token }) {
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail
+    ? LeadDetailApi.getPrimaryLeadDetail(detail)
+    : detail;
+  const customerId = leadRecord?.customer?.customer_id;
+  if (!customerId) {
+    return { dreDocuments: null, error: 'Customer ID was not found in lead details.' };
+  }
+
+  try {
+    const result = await LeadDetailApi.fetchLeadDreDocuments({
+      leadId,
+      token,
+      type: 'customer',
+      customerId,
+    });
+    if (!result.documents) {
+      return { dreDocuments: null, error: 'DRE document API returned no document data.' };
+    }
+    return { dreDocuments: result.documents || null, error: null };
+  } catch (err) {
+    return { dreDocuments: null, error: err.message };
+  }
+}
+
+async function buildBackendLeadContext({
+  leadId,
+  detail,
+  dreDocuments = null,
+  dreDocumentError = null,
+  leadDocumentStatus = null,
+  leadFacts = null,
+}) {
+  const response = await fetch(`${CONFIG.BACKEND_HTTP_URL}/api/lead/context`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lead_id: leadId || null,
+      lead_detail: detail || null,
+      lead_dre_documents: dreDocuments || null,
+      lead_dre_document_error: dreDocumentError || null,
+      lead_document_status: leadDocumentStatus || null,
+      lead_facts: leadFacts || null,
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Lead context API failed with HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function persistLeadContext({ detail, leadId, facts, missingFields, dreDocuments, dreDocumentError, leadContext }) {
+  await chrome.storage.local.set({
+    currentLeadDetail: detail || null,
+    currentLeadId: leadId || leadContext?.lead_id || null,
+    currentLeadFacts: facts || leadContext?.facts || null,
+    currentLeadMissingFields: missingFields || null,
+    currentLeadContext: leadContext || null,
+    currentLeadDocumentStatus: leadContext?.document_status || null,
+    currentLeadDreDocuments: dreDocuments || null,
+    currentLeadDreDocumentError: leadContext?.document_error || dreDocumentError || null,
+  });
+}
+
 async function fetchAndStoreLeadDetail(leadId) {
   const normalizedLeadId = LeadDetailApi.normalizeLeadId ? LeadDetailApi.normalizeLeadId(leadId) : String(leadId || '').trim();
   if (!/^\d+$/.test(normalizedLeadId)) {
@@ -296,14 +368,27 @@ async function fetchAndStoreLeadDetail(leadId) {
   }
 
   const { pageContext } = await getAmbakAuthContext();
+  const accessToken = getPageAccessToken(pageContext);
   console.log('[LeadDebug][background] fetching lead detail', {
     leadId: normalizedLeadId,
-    'auth token found': Boolean(pageContext?.token),
-    'auth token preview': maskAuthTokenForLog(pageContext?.token),
+    'auth token found': Boolean(accessToken),
+    'auth token preview': maskAuthTokenForLog(accessToken),
   });
-  const result = await LeadDetailApi.fetchLeadDetail({ leadId: normalizedLeadId, token: pageContext?.token });
+  const result = await LeadDetailApi.fetchLeadDetail({ leadId: normalizedLeadId, token: accessToken });
   const facts = LeadDetailApi.buildLeadFacts(result.detail);
   const missingFields = LeadDetailApi.buildLeadMissingFields(result.detail);
+  const dreResult = await fetchCustomerDreDocuments({
+    detail: result.detail,
+    leadId: result.leadId,
+    token: accessToken,
+  });
+  const leadContext = await buildBackendLeadContext({
+    leadId: result.leadId,
+    detail: result.detail,
+    dreDocuments: dreResult.dreDocuments,
+    dreDocumentError: dreResult.error,
+    leadFacts: facts,
+  });
   console.group('[LeadDebug][background] fetched lead detail');
   console.log('leadId', result.leadId);
   console.log('detail keys', result.detail ? Object.keys(result.detail).slice(0, 30) : []);
@@ -312,14 +397,26 @@ async function fetchAndStoreLeadDetail(leadId) {
   console.log('missing count', missingFields.length);
   console.log('missing sample', missingFields.slice(0, 30));
   console.groupEnd();
-  await chrome.storage.local.set({
-    currentLeadDetail: result.detail,
-    currentLeadId: result.leadId,
-    currentLeadFacts: facts,
-    currentLeadMissingFields: missingFields,
+  await persistLeadContext({
+    detail: result.detail,
+    leadId: result.leadId,
+    facts,
+    missingFields,
+    dreDocuments: dreResult.dreDocuments,
+    dreDocumentError: dreResult.error,
+    leadContext,
   });
   pushLeadContextToOffscreen({ leadId: result.leadId, facts, missingFields });
-  return { leadId: result.leadId, detail: result.detail, facts, missingFields };
+  return {
+    leadId: leadContext?.lead_id || result.leadId,
+    detail: result.detail,
+    facts,
+    missingFields,
+    dreDocuments: dreResult.dreDocuments,
+    dreDocumentError: leadContext?.document_error || dreResult.error,
+    leadContext,
+    documentStatus: leadContext?.document_status || null,
+  };
 }
 
 async function loadLeadDetailForChat(message, stored) {
@@ -327,23 +424,81 @@ async function loadLeadDetailForChat(message, stored) {
   const storedLeadId = stored.currentLeadId || null;
   const hasRequestedDifferentLead = requestedLeadId && storedLeadId && String(requestedLeadId) !== String(storedLeadId);
 
+  if (!hasRequestedDifferentLead && (message.lead_context || message.leadContext || stored.currentLeadContext)) {
+    const leadContext = message.lead_context || message.leadContext || stored.currentLeadContext;
+    const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || leadContext?.lead_detail || null;
+    const facts = message.lead_facts || message.leadFacts || stored.currentLeadFacts || leadContext?.facts || null;
+    return {
+      leadId: leadContext?.lead_id || requestedLeadId,
+      detail,
+      facts,
+      missingFields: message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
+      dreDocuments: message.lead_dre_documents || message.leadDreDocuments || stored.currentLeadDreDocuments || null,
+      dreDocumentError: message.lead_dre_document_error || message.leadDreDocumentError || stored.currentLeadDreDocumentError || leadContext?.document_error || null,
+      documentStatus: message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || leadContext?.document_status || null,
+      leadContext,
+    };
+  }
+
   if (!hasRequestedDifferentLead && (message.lead_detail || message.leadDetail || stored.currentLeadDetail)) {
     const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || null;
-    return {
+    const facts = LeadDetailApi.buildLeadFacts(detail);
+    const missingFields = LeadDetailApi.buildLeadMissingFields(detail);
+    const dreDocuments = message.lead_dre_documents || message.leadDreDocuments || stored.currentLeadDreDocuments || null;
+    const dreDocumentError = message.lead_dre_document_error || message.leadDreDocumentError || stored.currentLeadDreDocumentError || null;
+    const documentStatus = message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || null;
+    const leadContext = await buildBackendLeadContext({
       leadId: requestedLeadId,
       detail,
-      facts: LeadDetailApi.buildLeadFacts(detail),
-      missingFields: LeadDetailApi.buildLeadMissingFields(detail),
+      dreDocuments,
+      dreDocumentError,
+      leadDocumentStatus: documentStatus,
+      leadFacts: facts,
+    });
+    await persistLeadContext({ detail, leadId: requestedLeadId, facts, missingFields, dreDocuments, dreDocumentError, leadContext });
+    return {
+      leadId: leadContext?.lead_id || requestedLeadId,
+      detail,
+      facts,
+      missingFields,
+      dreDocuments,
+      dreDocumentError: leadContext?.document_error || dreDocumentError,
+      documentStatus: leadContext?.document_status || documentStatus,
+      leadContext,
     };
   }
 
   const candidateFacts = message.lead_facts || message.leadFacts || stored.currentLeadFacts || null;
   if (!hasRequestedDifferentLead && hasObjectFields(candidateFacts)) {
-    return {
+    const documentStatus = message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || null;
+    const dreDocuments = message.lead_dre_documents || message.leadDreDocuments || stored.currentLeadDreDocuments || null;
+    const dreDocumentError = message.lead_dre_document_error || message.leadDreDocumentError || stored.currentLeadDreDocumentError || null;
+    const leadContext = await buildBackendLeadContext({
       leadId: requestedLeadId,
+      detail: null,
+      dreDocuments,
+      dreDocumentError,
+      leadDocumentStatus: documentStatus,
+      leadFacts: candidateFacts,
+    });
+    await persistLeadContext({
+      detail: null,
+      leadId: requestedLeadId,
+      facts: candidateFacts,
+      missingFields: message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
+      dreDocuments,
+      dreDocumentError,
+      leadContext,
+    });
+    return {
+      leadId: leadContext?.lead_id || requestedLeadId,
       detail: null,
       facts: candidateFacts,
       missingFields: message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
+      dreDocuments,
+      dreDocumentError: leadContext?.document_error || dreDocumentError,
+      documentStatus: leadContext?.document_status || documentStatus,
+      leadContext,
     };
   }
 
@@ -356,11 +511,24 @@ async function loadLeadDetailForChat(message, stored) {
     detail: stored.currentLeadDetail || null,
     facts: stored.currentLeadFacts || null,
     missingFields: stored.currentLeadMissingFields || null,
+    dreDocuments: stored.currentLeadDreDocuments || null,
+    dreDocumentError: stored.currentLeadDreDocumentError || null,
+    documentStatus: stored.currentLeadDocumentStatus || null,
+    leadContext: stored.currentLeadContext || null,
   };
 }
 
 function handleChatSend(message, sender, sendResponse) {
-  chrome.storage.local.get(['currentLeadDetail', 'currentLeadId', 'currentLeadFacts', 'currentLeadMissingFields'])
+  chrome.storage.local.get([
+    'currentLeadDetail',
+    'currentLeadId',
+    'currentLeadFacts',
+    'currentLeadMissingFields',
+    'currentLeadContext',
+    'currentLeadDocumentStatus',
+    'currentLeadDreDocuments',
+    'currentLeadDreDocumentError',
+  ])
     .then(async (stored) => {
       const lead = await loadLeadDetailForChat(message, stored);
       const payload = {
@@ -371,6 +539,10 @@ function handleChatSend(message, sender, sendResponse) {
         lead_facts: lead.facts || null,
         lead_missing_fields: lead.missingFields || null,
         lead_refreshed: Boolean(message.lead_refreshed || message.leadRefreshed),
+        lead_dre_documents: lead.dreDocuments || null,
+        lead_dre_document_error: lead.dreDocumentError || null,
+        lead_document_status: lead.documentStatus || null,
+        lead_context: lead.leadContext || null,
       };
 
       console.group('[LeadDebug][background] /api/chat payload');
@@ -381,6 +553,9 @@ function handleChatSend(message, sender, sendResponse) {
       console.log('facts sample', payload.lead_facts ? Object.fromEntries(Object.entries(payload.lead_facts).slice(0, 30)) : {});
       console.log('missing count', Array.isArray(payload.lead_missing_fields) ? payload.lead_missing_fields.length : 0);
       console.log('missing sample', Array.isArray(payload.lead_missing_fields) ? payload.lead_missing_fields.slice(0, 30) : []);
+      console.log('has lead context', Boolean(payload.lead_context));
+      console.log('has DRE documents', Boolean(payload.lead_dre_documents));
+      console.log('document status', payload.lead_document_status || null);
       console.groupEnd();
 
       return fetch(`${CONFIG.BACKEND_HTTP_URL}/api/chat`, {
@@ -398,6 +573,7 @@ function handleChatSend(message, sender, sendResponse) {
         reply: data.reply || '',
         lead_id: data.lead_id || null,
         lead_context_used: Boolean(data.lead_context_used),
+        lead_context: data.lead_context || null,
         needs_lead_refresh_confirmation: Boolean(data.needs_lead_refresh_confirmation),
         previous_next_step: data.previous_next_step || null,
         used_cached_next_step: Boolean(data.used_cached_next_step),
@@ -412,7 +588,15 @@ function handleChatSend(message, sender, sendResponse) {
 function handleGetLeadDetail(message, sender, sendResponse) {
   fetchAndStoreLeadDetail(message.leadId || message.lead_id)
     .then((result) => {
-      sendResponse({ success: true, leadId: result.leadId, detail: result.detail, missingFields: result.missingFields });
+      sendResponse({
+        success: true,
+        leadId: result.leadId,
+        detail: result.detail,
+        missingFields: result.missingFields,
+        leadContext: result.leadContext || null,
+        documentStatus: result.documentStatus || null,
+        dreDocumentError: result.dreDocumentError || null,
+      });
     })
     .catch((err) => {
       sendResponse({ error: err.message });
@@ -460,6 +644,12 @@ function handleUtteranceCommitted(message) {
     utteranceId: message.utteranceId,
     speaker: message.speaker || null
   });
+  chrome.runtime.sendMessage({
+    type: 'UTTERANCE_COMMITTED',
+    utteranceId: message.utteranceId,
+    text: message.text,
+    speaker: message.speaker || null
+  }).catch(() => {});
   return false;
 }
 
