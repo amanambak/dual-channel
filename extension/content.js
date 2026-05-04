@@ -8,17 +8,45 @@ function safeJsonParse(value) {
   }
 }
 
-function normalizeStorageToken(value) {
+const LOAN_STAGE_HOST = 'loan-stage.ambak.com';
+
+function isLoanStagePage() {
+  return window.location.hostname === LOAN_STAGE_HOST;
+}
+
+function normalizeTokenText(value) {
   if (!value) {
     return '';
   }
   const text = String(value).trim().replace(/^"|"$/g, '');
-  const bearerMatch = text.match(/Bearer\s+([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/i);
+  const bearerMatch = text.match(/^Bearer\s+(.+)$/i);
   if (bearerMatch) {
-    return bearerMatch[1];
+    return bearerMatch[1].trim();
   }
-  const jwtMatch = text.match(/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/);
-  return jwtMatch ? jwtMatch[1] : '';
+  return text;
+}
+
+function isAccessTokenKey(key) {
+  const text = String(key || '');
+  return /(^|[._-])access[._-]?token$/i.test(text) && !/refresh/i.test(text);
+}
+
+function normalizeAccessToken(value) {
+  const token = normalizeTokenText(value);
+  const invalidTokenValues = new Set([
+    'undefined',
+    'null',
+    'false',
+    'true',
+    '[object Object]',
+  ]);
+  if (!token || /^[{[]/.test(token) || invalidTokenValues.has(token)) {
+    return '';
+  }
+  if (token.length < 20) {
+    return '';
+  }
+  return token;
 }
 
 function readStorageEntries(storage) {
@@ -30,19 +58,75 @@ function readStorageEntries(storage) {
   return entries;
 }
 
-function findAmbakAuthToken() {
+function findAccessTokenInObject(value, depth = 0) {
+  if (!value || depth > 6) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    const parsed = safeJsonParse(value);
+    return parsed ? findAccessTokenInObject(parsed, depth + 1) : '';
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const token = findAccessTokenInObject(item, depth + 1);
+      if (token) {
+        return token;
+      }
+    }
+    return '';
+  }
+
+  if (typeof value !== 'object') {
+    return '';
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (isAccessTokenKey(key)) {
+      const token = normalizeAccessToken(nestedValue);
+      if (token) {
+        return token;
+      }
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const token = findAccessTokenInObject(nestedValue, depth + 1);
+    if (token) {
+      return token;
+    }
+  }
+
+  return '';
+}
+
+function findAmbakAccessToken() {
+  if (!isLoanStagePage()) {
+    return '';
+  }
+
   const entries = [
     ...readStorageEntries(window.localStorage),
     ...readStorageEntries(window.sessionStorage),
   ];
-
-  const preferredEntry = entries.find(([key, value]) => /token|auth|jwt|access/i.test(key) && normalizeStorageToken(value));
-  if (preferredEntry) {
-    return normalizeStorageToken(preferredEntry[1]);
+  for (const [key, value] of entries) {
+    if (isAccessTokenKey(key)) {
+      const token = normalizeAccessToken(value);
+      if (token) {
+        return token;
+      }
+    }
   }
 
-  const anyTokenEntry = entries.find(([, value]) => normalizeStorageToken(value));
-  return anyTokenEntry ? normalizeStorageToken(anyTokenEntry[1]) : '';
+  for (const [, value] of entries) {
+    const token = findAccessTokenInObject(safeJsonParse(value));
+    if (token) {
+      return token;
+    }
+  }
+
+  return '';
 }
 
 function normalizeLeadId(value) {
@@ -118,8 +202,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === 'GET_AMBAK_PAGE_CONTEXT') {
+    const accessToken = findAmbakAccessToken();
     sendResponse({
-      token: findAmbakAuthToken(),
+      accessToken,
+      token: accessToken,
       leadId: findAmbakLeadId(),
       url: window.location.href,
     });

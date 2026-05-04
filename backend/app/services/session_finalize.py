@@ -43,18 +43,18 @@ async def finalize_utterance(session) -> None:
         session.state.customer_last_utterance = text
         session.state.customer_history.append(text)
         if len(session.state.customer_history) > 20:
-            session.state.customer_history.pop(0)
+            session.state.customer_history = session.state.customer_history[-20:]
     elif speaker == "1":
         session.state.agent_last_utterance = text
         session.state.agent_history.append(text)
         if len(session.state.agent_history) > 20:
-            session.state.agent_history.pop(0)
+            session.state.agent_history = session.state.agent_history[-20:]
 
     session.state.messages.append(
         ConversationMessage(type="user", text=text, utterance_id=utterance_id, speaker=speaker)
     )
     if len(session.state.messages) > 1000:
-        session.state.messages.pop(0)
+        session.state.messages = session.state.messages[-1000:]
     await session.send_model(
         UtteranceCommittedEvent(utteranceId=utterance_id, text=text, speaker=speaker)
     )

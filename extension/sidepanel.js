@@ -1,9 +1,12 @@
 // sidepanel.js — Native Side Panel Logic
 
+import { normalizeLeadIdInput } from './utils.js';
+
 let currentCard = null;
 let pendingMergeCard = null;
 let pendingMergeAt = 0;
 const aiCards = new Map();
+const committedUtteranceIds = new Set();
 const container = document.getElementById('transcript-container');
 const callTabBtn = document.getElementById('call-tab');
 const chatTabBtn = document.getElementById('chat-tab');
@@ -23,17 +26,25 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send-btn');
 const clearChatBtn = document.getElementById('clear-chat-btn');
-const currentTabUrl = document.getElementById('current-tab-url');
-const currentTabUrlText = document.getElementById('current-tab-url-text');
+const leadIdForm = document.getElementById('lead-id-form');
+const leadIdInput = document.getElementById('lead-id-input');
+const leadIdFetchBtn = document.getElementById('lead-id-fetch-btn');
 const leadDetailStatus = document.getElementById('lead-detail-status');
+const leadDetailToggleBtn = document.getElementById('lead-detail-toggle-btn');
 const leadDetailData = document.getElementById('lead-detail-data');
 
 let activePanelTab = 'call';
 let chatMessages = [];
 let chatSending = false;
 let latestSummary = null;
-let leadDetailLookupTimer = null;
+let latestLeadDetail = null;
+let latestLeadId = null;
+let latestLeadFacts = null;
+let latestLeadMissingFields = null;
+let latestLeadContext = null;
 let leadDetailRequestId = 0;
+let leadFetchInFlight = false;
+let leadDetailsCollapsed = false;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -41,12 +52,6 @@ async function loadStoredMessages() {
       resolve(response?.messages || []);
     });
   });
-}
-
-async function loadStoredChatMessages() {
-  const result = await chrome.storage.local.get(['chatMessages', 'activePanelTab']);
-  chatMessages = Array.isArray(result.chatMessages) ? result.chatMessages : [];
-  activePanelTab = result.activePanelTab === 'chat' ? 'chat' : 'call';
 }
 
 async function persistChatMessages() {
@@ -86,14 +91,31 @@ function renderStoredAiResponse(msg) {
 }
 
 async function initializePanel() {
-  const [messages] = await Promise.all([
+  // Batch all storage reads into a single call
+  const [messages, stored] = await Promise.all([
     loadStoredMessages(),
-    loadStoredChatMessages(),
-    refreshCurrentTabUrl(),
+    chrome.storage.local.get([
+      'chatMessages',
+      'activePanelTab',
+      'currentLeadDetail',
+      'currentLeadId',
+      'currentLeadFacts',
+      'currentLeadMissingFields',
+      'currentLeadContext',
+      'currentLeadDocumentStatus',
+      'currentLeadDreDocumentError',
+      'leadDetailsCollapsed',
+    ]),
   ]);
+  // Restore chat state
+  chatMessages = Array.isArray(stored.chatMessages) ? stored.chatMessages : [];
+  activePanelTab = stored.activePanelTab === 'chat' ? 'chat' : 'call';
+  leadDetailsCollapsed = Boolean(stored.leadDetailsCollapsed);
+
   renderStoredMessages(messages);
   renderStoredChatMessages();
   setActivePanelTab(activePanelTab, { persist: false });
+  await loadStoredLeadDetail();
 
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (response) {
@@ -106,21 +128,24 @@ async function initializePanel() {
 
 initializePanel();
 
-chrome.tabs.onActivated.addListener(() => {
-  refreshCurrentTabUrl();
-});
+if (leadIdForm) {
+  leadIdForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    fetchLeadDetailByInput().catch((err) => {
+      updateLeadDetailStatus(`Lead detail fetch failed: ${err.message}`, 'error');
+      leadFetchInFlight = false;
+      if (leadIdFetchBtn) {
+        leadIdFetchBtn.disabled = false;
+      }
+    });
+  });
+}
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') {
-    refreshCurrentTabUrl();
-  }
-});
-
-chrome.windows.onFocusChanged.addListener((windowId) => {
-  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
-    refreshCurrentTabUrl();
-  }
-});
+if (leadDetailToggleBtn) {
+  leadDetailToggleBtn.addEventListener('click', () => {
+    setLeadDetailsCollapsed(!leadDetailsCollapsed);
+  });
+}
 
 callTabBtn.addEventListener('click', () => {
   setActivePanelTab('call');
@@ -138,6 +163,7 @@ toggleBtn.addEventListener('click', () => {
     if (response) {
       updateCaptureUI(response.active);
       updateAgentMicPauseUI(response.agentMicPaused, response.active);
+      updateCaptureModeUI(response.captureMode);
     }
   });
 });
@@ -220,26 +246,23 @@ modalClose.addEventListener('click', () => {
   summaryModal.classList.remove('active');
 });
 
-summaryModal.addEventListener('click', (e) => {
-  if (e.target === summaryModal) {
+summaryModal.addEventListener('click', (event) => {
+  if (event.target === summaryModal) {
     summaryModal.classList.remove('active');
   }
 });
 
-document.getElementById('mic-permission-btn').addEventListener('click', () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
-});
+const micPermissionBtn = document.getElementById('mic-permission-btn');
+if (micPermissionBtn) {
+  micPermissionBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
+  });
+}
 
 function updateCaptureUI(isActive) {
-  if (isActive) {
-    toggleBtn.textContent = 'Stop Capture';
-    toggleBtn.classList.add('active');
-    dot.classList.add('active');
-  } else {
-    toggleBtn.textContent = 'Start Capture';
-    toggleBtn.classList.remove('active');
-    dot.classList.remove('active');
-  }
+  toggleBtn.classList.toggle('active', Boolean(isActive));
+  toggleBtn.textContent = isActive ? 'Stop Capture' : 'Start Capture';
+  dot.classList.toggle('active', Boolean(isActive));
 }
 
 function updateAgentMicPauseUI(isPaused, isActive = true) {
@@ -253,52 +276,71 @@ function updateCaptureModeUI(mode) {
   captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
 }
 
-async function refreshCurrentTabUrl() {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const url = tab?.url || tab?.pendingUrl || '';
-    updateCurrentTabUrl(url);
-  } catch (err) {
-    updateCurrentTabUrl('');
-  }
-}
+async function loadStoredLeadDetail() {
+  const stored = await chrome.storage.local
+    .get([
+      'currentLeadDetail',
+      'currentLeadId',
+      'currentLeadFacts',
+      'currentLeadMissingFields',
+      'currentLeadContext',
+      'currentLeadDocumentStatus',
+      'currentLeadDreDocumentError',
+    ])
+    .catch(() => ({}));
 
-function updateCurrentTabUrl(url) {
-  if (!currentTabUrlText || !currentTabUrl) {
+  latestLeadDetail = stored.currentLeadDetail || null;
+  latestLeadId = stored.currentLeadId || null;
+  latestLeadFacts = stored.currentLeadFacts || LeadDetailApi.buildLeadFacts(latestLeadDetail);
+  latestLeadMissingFields = stored.currentLeadMissingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadContext = stored.currentLeadContext || null;
+
+  if (leadIdInput && latestLeadId) {
+    leadIdInput.value = String(latestLeadId);
+  }
+
+  if (latestLeadDetail && latestLeadId) {
+    updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+    renderLeadDetailData(
+      latestLeadDetail,
+      latestLeadContext,
+      stored.currentLeadDocumentStatus || null,
+      stored.currentLeadDreDocumentError || '',
+    );
     return;
   }
 
-  const displayUrl = url || 'Current tab URL unavailable';
-  currentTabUrlText.textContent = displayUrl;
-  currentTabUrl.title = displayUrl;
-  scheduleLeadDetailLookup(url);
+  updateLeadDetailStatus('Enter a lead id and fetch details.');
+  renderLeadDetailData(null);
 }
 
-function scheduleLeadDetailLookup(url) {
-  if (!leadDetailStatus) {
+async function fetchLeadDetailByInput() {
+  if (!leadIdInput || !leadDetailStatus) {
     return;
   }
 
-  clearTimeout(leadDetailLookupTimer);
-  leadDetailLookupTimer = setTimeout(() => {
-    refreshLeadDetailStatus(url).catch(() => {});
-  }, 250);
-}
+  const leadId = normalizeLeadIdInput(leadIdInput.value);
+  if (!leadId) {
+    updateLeadDetailStatus('Enter a valid numeric lead id.', 'error');
+    return;
+  }
 
-async function refreshLeadDetailStatus(url) {
+  if (leadFetchInFlight) {
+    return;
+  }
+
   const requestId = leadDetailRequestId + 1;
   leadDetailRequestId = requestId;
-
-  if (!url || !LeadDetailApi.isLoanDetailUrl(url)) {
-    updateLeadDetailStatus('Lead detail check will run on Ambak lead pages.');
-    renderLeadDetailData(null);
-    return;
+  leadFetchInFlight = true;
+  if (leadIdFetchBtn) {
+    leadIdFetchBtn.disabled = true;
   }
 
-  updateLeadDetailStatus('Checking lead details from API...', 'loading');
+  updateLeadDetailStatus(`Fetching lead ${leadId} details...`, 'loading');
   renderLeadDetailData(null);
+
   const response = await new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', url }, (reply) => {
+    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', leadId }, (reply) => {
       resolve(reply || {});
     });
   });
@@ -307,36 +349,48 @@ async function refreshLeadDetailStatus(url) {
     return;
   }
 
-  if (response.error) {
-    updateLeadDetailStatus(`Lead detail API check failed: ${response.error}`, 'error');
-    renderLeadDetailData(null);
-    return;
+  leadFetchInFlight = false;
+  if (leadIdFetchBtn) {
+    leadIdFetchBtn.disabled = false;
   }
-  if (response.skipped) {
-    updateLeadDetailStatus(response.reason || 'Lead detail check skipped.');
+
+  if (response.error) {
+    updateLeadDetailStatus(`Lead detail fetch failed: ${response.error}`, 'error');
+    latestLeadDetail = null;
+    latestLeadId = null;
+    latestLeadFacts = null;
+    latestLeadMissingFields = null;
+    latestLeadContext = null;
     renderLeadDetailData(null);
     return;
   }
 
-  updateLeadDetailStatus(formatLeadDetailStatus(response.leadId, response.detail), 'success');
-  renderLeadDetailData(response.detail);
+  latestLeadDetail = response.detail || null;
+  latestLeadId = response.leadId || leadId;
+  latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
+  latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadContext = response.leadContext || null;
+  if (leadIdInput) {
+    leadIdInput.value = String(latestLeadId || leadId);
+  }
+  updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+  renderLeadDetailData(latestLeadDetail, latestLeadContext, response.documentStatus || null, response.dreDocumentError || '');
 }
 
-function formatLeadDetailStatus(leadId, detail) {
-  const customer = detail?.customer || {};
-  const leadDetails = detail?.lead_details || {};
-  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ');
-  const statusName = detail?.status_info?.statuslang?.status_name || '';
+function formatLeadDetailStatus(leadId, detail, missingFields = []) {
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail) || {};
+  const leadDetails = leadRecord?.lead_details || {};
+  const statusName = leadRecord?.status_info?.statuslang?.status_name || '';
   const loanAmount = leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '';
   const parts = [`Lead ${leadId} details loaded`];
-  if (customerName) {
-    parts.push(customerName);
-  }
   if (statusName) {
     parts.push(statusName);
   }
   if (loanAmount) {
     parts.push(`₹${loanAmount}`);
+  }
+  if (Array.isArray(missingFields)) {
+    parts.push(`${missingFields.length} missing/null fields`);
   }
   return parts.join(' · ');
 }
@@ -348,28 +402,99 @@ function updateLeadDetailStatus(message, state = '') {
   leadDetailStatus.classList.toggle('loading', state === 'loading');
 }
 
-function renderLeadDetailData(detail) {
+function setLeadDetailsCollapsed(collapsed, options = {}) {
+  leadDetailsCollapsed = Boolean(collapsed);
+  if (leadDetailData) {
+    leadDetailData.classList.toggle('collapsed', leadDetailsCollapsed);
+  }
+  if (leadDetailToggleBtn) {
+    leadDetailToggleBtn.textContent = leadDetailsCollapsed ? 'Show details' : 'Hide details';
+    leadDetailToggleBtn.setAttribute('aria-expanded', String(!leadDetailsCollapsed));
+  }
+  if (options.persist !== false) {
+    chrome.storage.local.set({ leadDetailsCollapsed }).catch(() => {});
+  }
+}
+
+function updateLeadDetailToggle(hasDetail) {
+  if (!leadDetailToggleBtn) {
+    return;
+  }
+  leadDetailToggleBtn.classList.toggle('active', Boolean(hasDetail));
+  leadDetailToggleBtn.disabled = !hasDetail;
+  setLeadDetailsCollapsed(hasDetail ? leadDetailsCollapsed : false, { persist: hasDetail });
+}
+
+function getDreStatus(leadContext) {
+  return leadContext?.dre_status || '';
+}
+
+function buildDocumentBuckets(documentStatus) {
+  const toRows = (values) => (Array.isArray(values) ? values : [])
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map((name) => ({ name: String(name).trim() }));
+
+  return {
+    uploaded: toRows(documentStatus?.uploaded_documents),
+    pending: toRows(documentStatus?.missing_documents),
+  };
+}
+
+function appendDocumentList(parent, title, docs, state) {
+  const section = document.createElement('div');
+  section.className = 'lead-document-group';
+
+  const heading = document.createElement('div');
+  heading.className = 'lead-document-heading';
+  heading.textContent = `${title} (${docs.length})`;
+  section.appendChild(heading);
+
+  if (!docs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'lead-document-empty';
+    empty.textContent = 'None';
+    section.appendChild(empty);
+  } else {
+    docs.forEach((doc) => {
+      const row = document.createElement('div');
+      row.className = `lead-document-item ${state}`;
+      const dotEl = document.createElement('span');
+      dotEl.className = 'lead-document-dot';
+      const label = document.createElement('span');
+      label.textContent = doc.name;
+      row.appendChild(dotEl);
+      row.appendChild(label);
+      section.appendChild(row);
+    });
+  }
+
+  parent.appendChild(section);
+}
+
+function renderLeadDetailData(detail, leadContext = null, documentStatus = null, dreDocumentError = '') {
   if (!leadDetailData) {
     return;
   }
   leadDetailData.innerHTML = '';
   leadDetailData.classList.toggle('active', Boolean(detail));
+  updateLeadDetailToggle(Boolean(detail));
   if (!detail) {
     return;
   }
 
-  const customer = detail.customer || {};
-  const leadDetails = detail.lead_details || {};
+  const leadRecord = LeadDetailApi.getPrimaryLeadDetail(detail) || {};
+  const leadDetails = leadRecord.lead_details || {};
   const bankName = leadDetails.bank?.banklang?.bank_name || '';
+  const backendDocumentStatus = leadContext?.document_status || documentStatus;
+  const backendDocumentError = leadContext?.document_error || dreDocumentError;
+  const dreStatus = getDreStatus(leadContext);
   const summary = {
-    Lead: detail.id || leadDetails.lead_id || '',
-    Customer: [customer.first_name, customer.last_name].filter(Boolean).join(' '),
-    Mobile: customer.mobile || '',
-    Email: customer.email || '',
-    Status: detail.status_info?.statuslang?.status_name || '',
-    Substatus: detail.sub_status_info?.substatuslang?.sub_status_name || '',
+    Lead: leadContext?.lead_id || leadRecord.id || leadDetails.lead_id || '',
+    Status: leadRecord.status_info?.statuslang?.status_name || '',
+    Substatus: leadRecord.sub_status_info?.substatuslang?.sub_status_name || '',
     Bank: bankName,
     Amount: leadDetails.loan_amount || leadDetails.login_amount || leadDetails.approved_amount || '',
+    DRE: dreStatus,
   };
 
   const summaryEl = document.createElement('div');
@@ -401,11 +526,36 @@ function renderLeadDetailData(detail) {
   rawSummary.textContent = 'View raw loaded data';
 
   const rawJson = document.createElement('pre');
-  rawJson.textContent = JSON.stringify(detail, null, 2);
+  rawJson.textContent = JSON.stringify({
+    dre_status: dreStatus || null,
+    lead_context: leadContext,
+    lead_detail: detail,
+    lead_document_status: backendDocumentStatus,
+  }, null, 2);
+
+  const docBuckets = buildDocumentBuckets(backendDocumentStatus);
+  const documentsEl = document.createElement('div');
+  documentsEl.className = 'lead-document-section';
+
+  const documentsTitle = document.createElement('div');
+  documentsTitle.className = 'lead-document-title';
+  documentsTitle.textContent = 'DRE Documents';
+  documentsEl.appendChild(documentsTitle);
+
+  if (backendDocumentError) {
+    const error = document.createElement('div');
+    error.className = 'lead-document-error';
+    error.textContent = backendDocumentError;
+    documentsEl.appendChild(error);
+  }
+
+  appendDocumentList(documentsEl, 'Uploaded', docBuckets.uploaded, 'uploaded');
+  appendDocumentList(documentsEl, 'Pending', docBuckets.pending, 'pending');
 
   rawDetails.appendChild(rawSummary);
   rawDetails.appendChild(rawJson);
   leadDetailData.appendChild(summaryEl);
+  leadDetailData.appendChild(documentsEl);
   leadDetailData.appendChild(rawDetails);
 }
 
@@ -440,13 +590,13 @@ function renderStoredChatMessages() {
 
   for (const message of chatMessages) {
     chatLog.appendChild(
-      createChatMessageElement(message.role, message.content, false, message.details).element,
+      createChatMessageElement(message.role, message.content, false, message.details, message.actions).element,
     );
   }
   scrollChatToBottom();
 }
 
-function createChatMessageElement(role, content, loading = false, details = null) {
+function createChatMessageElement(role, content, loading = false, details = null, actions = null) {
   const el = document.createElement('div');
   el.className = `chat-message ${role === 'user' ? 'user' : 'assistant'}`;
   if (loading) {
@@ -468,7 +618,62 @@ function createChatMessageElement(role, content, loading = false, details = null
     el.appendChild(createKeyValueCard(details));
   }
 
+  if (actions?.type === 'lead_refresh_confirmation') {
+    el.appendChild(createLeadRefreshActions());
+  }
+
   return { element: el, text };
+}
+
+function createLeadRefreshActions() {
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'chat-actions';
+
+  const yesBtn = document.createElement('button');
+  yesBtn.type = 'button';
+  yesBtn.className = 'chat-action-btn primary';
+  yesBtn.textContent = 'Yes, refresh';
+  yesBtn.addEventListener('click', () => {
+    disableActionButtons(actionsEl);
+    resolveLeadRefreshActions(actionsEl).catch(() => {});
+    handleLeadRefreshConfirmation(true).catch((err) => {
+      addAssistantChatMessage(`Lead refresh failed: ${err.message}`);
+    });
+  });
+
+  const noBtn = document.createElement('button');
+  noBtn.type = 'button';
+  noBtn.className = 'chat-action-btn';
+  noBtn.textContent = 'No, same data';
+  noBtn.addEventListener('click', () => {
+    disableActionButtons(actionsEl);
+    resolveLeadRefreshActions(actionsEl).catch(() => {});
+    handleLeadRefreshConfirmation(false).catch((err) => {
+      addAssistantChatMessage(`Failed to continue: ${err.message}`);
+    });
+  });
+
+  actionsEl.appendChild(yesBtn);
+  actionsEl.appendChild(noBtn);
+  return actionsEl;
+}
+
+function disableActionButtons(container) {
+  container.querySelectorAll('button').forEach((button) => {
+    button.disabled = true;
+  });
+}
+
+async function resolveLeadRefreshActions(container) {
+  container.remove();
+  for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+    const message = chatMessages[index];
+    if (message?.actions?.type === 'lead_refresh_confirmation') {
+      message.actions = null;
+      break;
+    }
+  }
+  await persistChatMessages().catch(() => {});
 }
 
 function createKeyValueCard(details) {
@@ -499,17 +704,63 @@ function scrollChatToBottom() {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-async function sendChatMessage() {
+async function addAssistantChatMessage(content, actions = null) {
+  chatMessages.push({
+    role: 'assistant',
+    content,
+    timestamp: Date.now(),
+    actions,
+  });
+  chatLog.innerHTML = '';
+  renderStoredChatMessages();
+  await persistChatMessages().catch(() => {});
+}
+
+async function handleLeadRefreshConfirmation(shouldRefresh) {
+  if (!shouldRefresh) {
+    await sendChatMessage('No, same data');
+    return;
+  }
+
+  const leadId = latestLeadId || normalizeLeadIdInput(leadIdInput?.value);
+  if (!leadId) {
+    throw new Error('Lead id is required to refresh lead data.');
+  }
+
+  updateLeadDetailStatus(`Refreshing lead ${leadId} details...`, 'loading');
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_LEAD_DETAIL', leadId }, (reply) => {
+      resolve(reply || {});
+    });
+  });
+  if (response.error) {
+    throw new Error(response.error);
+  }
+
+  latestLeadDetail = response.detail || null;
+  latestLeadId = response.leadId || leadId;
+  latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
+  latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadContext = response.leadContext || null;
+  updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+  renderLeadDetailData(latestLeadDetail, latestLeadContext, response.documentStatus || null, response.dreDocumentError || '');
+
+  await sendChatMessage('Yes, refreshed latest lead data. What is the next step?', { leadRefreshed: true });
+}
+
+async function sendChatMessage(textOverride = null, options = {}) {
   if (chatSending) {
     return;
   }
 
-  const text = chatInput.value.trim();
+  const text = (textOverride ?? chatInput.value).trim();
   if (!text) {
     return;
   }
 
-  chatInput.value = '';
+  if (textOverride === null) {
+    chatInput.value = '';
+  }
   const userMessage = { role: 'user', content: text, timestamp: Date.now() };
   chatMessages.push(userMessage);
   chatLog.innerHTML = '';
@@ -528,16 +779,51 @@ async function sendChatMessage() {
       role: item.role,
       content: item.content,
     }));
+    const storedLead = await chrome.storage.local
+      .get([
+        'currentLeadDetail',
+        'currentLeadId',
+        'currentLeadContext',
+        'currentLeadDreDocuments',
+        'currentLeadDreDocumentError',
+        'currentLeadDocumentStatus',
+      ])
+      .catch(() => ({}));
+    const leadDetailForChat = latestLeadDetail || storedLead.currentLeadDetail || null;
+    const leadIdForChat = latestLeadId || storedLead.currentLeadId || normalizeLeadIdInput(leadIdInput?.value) || null;
+    const leadContextForChat = latestLeadContext || storedLead.currentLeadContext || null;
+    const chatPayload = {
+      type: 'CHAT_SEND',
+      message: text,
+      history,
+      lead_id: leadIdForChat,
+      lead_refreshed: Boolean(options.leadRefreshed),
+      lead_context: leadContextForChat,
+      lead_dre_documents: storedLead.currentLeadDreDocuments || null,
+      lead_dre_document_error: storedLead.currentLeadDreDocumentError || null,
+      lead_document_status: storedLead.currentLeadDocumentStatus || leadContextForChat?.document_status || null,
+    };
+
+    if (leadDetailForChat) {
+      chatPayload.lead_detail = leadDetailForChat;
+      chatPayload.lead_facts = LeadDetailApi.buildLeadFacts(leadDetailForChat);
+      chatPayload.lead_missing_fields = LeadDetailApi.buildLeadMissingFields(leadDetailForChat);
+    }
+
+    console.group('[LeadDebug][sidepanel] chat payload');
+    console.log('lead_id', chatPayload.lead_id);
+    console.log('has lead_detail', Boolean(chatPayload.lead_detail));
+    console.log('lead_detail keys', chatPayload.lead_detail ? Object.keys(chatPayload.lead_detail).slice(0, 30) : []);
+    console.log('lead_facts count', chatPayload.lead_facts ? Object.keys(chatPayload.lead_facts).length : 0);
+    console.log('lead_facts sample', chatPayload.lead_facts ? Object.fromEntries(Object.entries(chatPayload.lead_facts).slice(0, 30)) : {});
+    console.log('lead_missing_fields count', Array.isArray(chatPayload.lead_missing_fields) ? chatPayload.lead_missing_fields.length : 0);
+    console.log('lead_missing_fields sample', Array.isArray(chatPayload.lead_missing_fields) ? chatPayload.lead_missing_fields.slice(0, 30) : []);
+    console.log('has lead_context', Boolean(chatPayload.lead_context));
+    console.log('has DRE documents', Boolean(chatPayload.lead_dre_documents));
+    console.groupEnd();
 
     const response = await new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        {
-          type: 'CHAT_SEND',
-          message: text,
-          history,
-        },
-        (reply) => resolve(reply),
-      );
+      chrome.runtime.sendMessage(chatPayload, (reply) => resolve(reply));
     });
 
     const replyText = response?.reply?.reply || response?.reply || response?.text || '';
@@ -547,10 +833,18 @@ async function sendChatMessage() {
 
     assistantBubble.element.classList.remove('loading');
     assistantBubble.text.textContent = replyText;
+    const actions = response?.needs_lead_refresh_confirmation ? { type: 'lead_refresh_confirmation' } : null;
+    if (actions) {
+      assistantBubble.element.appendChild(createLeadRefreshActions());
+    }
+    if (response?.lead_context) {
+      latestLeadContext = response.lead_context;
+    }
     chatMessages.push({
       role: 'assistant',
       content: replyText,
       timestamp: Date.now(),
+      actions,
     });
     await persistChatMessages().catch(() => {});
   } catch (err) {
@@ -575,7 +869,7 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
     const canMergePending =
       pendingMergeCard
       && pendingMergeCard.speakerLabel === speakerLabel
-      && now - pendingMergeAt <= 1800;
+      && now - pendingMergeAt <= CONFIG.UTTERANCE_MERGE_WINDOW_MS;
 
     if (!currentCard && transcript.trim()) {
       if (canMergePending) {
@@ -612,6 +906,9 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
 
   AI_RESPONSE_CHUNK(message) {
     const { utteranceId, text, isDone, finalText } = message;
+    if (isDone && !text && !finalText && !aiCards.has(utteranceId)) {
+      return;
+    }
     let aiCard = aiCards.get(utteranceId);
     if (!aiCard) {
       collapseOtherAiCards(utteranceId);
@@ -642,6 +939,10 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
     }
   },
 
+  UTTERANCE_COMMITTED(message) {
+    renderCommittedUtterance(message);
+  },
+
   API_ERROR(message) { addErrorToContainer(message.message, message.source); },
 };
 
@@ -657,6 +958,7 @@ function scrollToBottom() {
 function createUtteranceCard(id, speakerLabel = 'Customer') {
   const el = document.createElement('div');
   el.className = 'utterance-card';
+  el.dataset.utteranceId = id;
   const badge = document.createElement('div');
   badge.className = `speaker-tag ${speakerLabel === 'Agent' ? 'agent' : 'customer'}`;
   badge.textContent = speakerLabel;
@@ -670,6 +972,67 @@ function createUtteranceCard(id, speakerLabel = 'Customer') {
   el.appendChild(badge);
   el.appendChild(textWrap);
   return { element: el, stable, interim, id, badge, speakerLabel };
+}
+
+function normalizeDisplayText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function cardHasCommittedText(card, text) {
+  if (!card || !text) {
+    return false;
+  }
+  return normalizeDisplayText(card.stable?.textContent).includes(text);
+}
+
+function renderCommittedUtterance(message) {
+  const text = normalizeDisplayText(message.text);
+  if (!text) {
+    return;
+  }
+
+  const utteranceId = message.utteranceId || `committed-${Date.now()}-${Math.random()}`;
+  if (committedUtteranceIds.has(utteranceId)) {
+    return;
+  }
+  committedUtteranceIds.add(utteranceId);
+
+  const speakerLabel = resolveSpeakerLabel(message.speaker);
+  if (cardHasCommittedText(currentCard, text) || cardHasCommittedText(pendingMergeCard, text)) {
+    if (currentCard) {
+      currentCard.element.dataset.utteranceId = utteranceId;
+      finalizeCard(currentCard);
+      pendingMergeCard = currentCard;
+      pendingMergeAt = Date.now();
+      currentCard = null;
+    }
+    return;
+  }
+
+  const existingCards = Array.from(container.querySelectorAll('.utterance-card')).slice(-4);
+  if (existingCards.some((el) => normalizeDisplayText(el.textContent).includes(text))) {
+    return;
+  }
+
+  if (currentCard && currentCard.speakerLabel === speakerLabel) {
+    currentCard.stable.textContent = text;
+    currentCard.interim.textContent = '';
+    currentCard.element.dataset.utteranceId = utteranceId;
+    finalizeCard(currentCard);
+    pendingMergeCard = currentCard;
+    pendingMergeAt = Date.now();
+    currentCard = null;
+    scrollToBottom();
+    return;
+  }
+
+  const card = createUtteranceCard(utteranceId, speakerLabel);
+  card.stable.textContent = text;
+  finalizeCard(card);
+  container.appendChild(card.element);
+  pendingMergeCard = card;
+  pendingMergeAt = Date.now();
+  scrollToBottom();
 }
 
 function updateInterimInCard(card, text) {

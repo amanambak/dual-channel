@@ -72,9 +72,22 @@
       flex: 1;
       min-height: 0;
       flex-direction: column;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     .view.active {
       display: flex;
+    }
+    .view::-webkit-scrollbar {
+      width: 10px;
+    }
+    .view::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .view::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.22);
+      border-radius: 999px;
+      border: 2px solid rgba(9, 17, 31, 0.85);
     }
     .header {
       display: flex;
@@ -114,7 +127,7 @@
       font-weight: 700;
       letter-spacing: 0.01em;
     }
-    .current-tab-url {
+    .lead-id-lookup {
       display: flex;
       flex-direction: column;
       gap: 4px;
@@ -124,20 +137,46 @@
       background: rgba(15, 23, 40, 0.62);
       min-width: 0;
     }
-    .current-tab-label {
+    .lead-id-label {
       color: var(--muted-strong);
       font-size: 0.68rem;
       font-weight: 800;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    .current-tab-value {
-      color: var(--accent);
-      font-size: 0.78rem;
-      line-height: 1.35;
-      overflow: hidden;
-      text-overflow: ellipsis;
+    .lead-id-form {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .lead-id-input {
+      min-width: 0;
+      flex: 1;
+      border: 1px solid rgba(125, 211, 252, 0.24);
+      border-radius: 10px;
+      background: rgba(2, 6, 23, 0.5);
+      color: var(--text);
+      padding: 9px 10px;
+      font-size: 0.84rem;
+      outline: none;
+    }
+    .lead-id-input:focus {
+      border-color: rgba(56, 189, 248, 0.7);
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.16);
+    }
+    .lead-id-fetch-btn {
+      border: 1px solid rgba(56, 189, 248, 0.36);
+      border-radius: 10px;
+      background: linear-gradient(135deg, #0369a1, #0ea5e9);
+      color: #fff;
+      font-weight: 800;
+      padding: 0 13px;
+      cursor: pointer;
       white-space: nowrap;
+    }
+    .lead-id-fetch-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
     }
     .lead-detail-status {
       display: flex;
@@ -163,6 +202,28 @@
       border-color: rgba(125, 211, 252, 0.24);
       color: var(--accent);
     }
+    .lead-detail-toggle {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      border: 1px solid rgba(125, 211, 252, 0.22);
+      border-radius: 10px;
+      background: rgba(9, 17, 31, 0.42);
+      color: var(--accent);
+      font-size: 0.74rem;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .lead-detail-toggle.active {
+      display: flex;
+    }
+    .lead-detail-toggle:hover,
+    .lead-detail-toggle:focus-visible {
+      border-color: rgba(125, 211, 252, 0.45);
+      color: var(--text);
+      outline: none;
+    }
     .lead-detail-data {
       display: none;
       padding: 10px 11px;
@@ -177,6 +238,9 @@
     }
     .lead-detail-data.active {
       display: block;
+    }
+    .lead-detail-data.collapsed {
+      display: none;
     }
     .lead-detail-summary {
       display: grid;
@@ -199,6 +263,59 @@
     .lead-detail-value {
       color: var(--text);
       overflow-wrap: anywhere;
+    }
+    .lead-document-section {
+      display: grid;
+      gap: 9px;
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 10px;
+      background: rgba(9, 17, 31, 0.36);
+    }
+    .lead-document-title {
+      color: var(--text);
+      font-weight: 900;
+      font-size: 0.78rem;
+    }
+    .lead-document-group {
+      display: grid;
+      gap: 5px;
+    }
+    .lead-document-heading {
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .lead-document-item {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .lead-document-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted-strong);
+    }
+    .lead-document-item.uploaded .lead-document-dot {
+      background: var(--success);
+    }
+    .lead-document-item.pending .lead-document-dot {
+      background: var(--accent-warm);
+    }
+    .lead-document-empty,
+    .lead-document-error {
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+    .lead-document-error {
+      color: #fecaca;
     }
     .lead-detail-json summary {
       cursor: pointer;
@@ -370,7 +487,8 @@
       border-color: rgba(255, 107, 122, 0.16);
     }
     #transcript-container {
-      flex-grow: 1;
+      flex: 1 0 180px;
+      min-height: 180px;
       overflow-y: auto;
       padding: 14px;
       display: flex;
@@ -583,6 +701,30 @@
       white-space: pre-wrap;
       line-height: 1.45;
       color: var(--text);
+    }
+    .chat-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .chat-action-btn {
+      border: 1px solid rgba(125, 211, 252, 0.28);
+      border-radius: 8px;
+      background: rgba(15, 23, 40, 0.72);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 800;
+      padding: 7px 10px;
+    }
+    .chat-action-btn.primary {
+      background: linear-gradient(135deg, #0369a1, #0ea5e9);
+      border-color: rgba(125, 211, 252, 0.42);
+    }
+    .chat-action-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
     }
     .chat-kv-card {
       margin-top: 10px;
@@ -914,11 +1056,15 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
         </button>
       </div>
-      <div id="current-tab-url" class="current-tab-url" title="Current tab URL">
-        <div class="current-tab-label">Current Tab URL</div>
-        <div id="current-tab-url-text" class="current-tab-value">Detecting current tab...</div>
+      <div id="lead-id-lookup" class="lead-id-lookup" title="Lead detail lookup">
+        <div class="lead-id-label">Lead Detail Lookup</div>
+        <form id="lead-id-form" class="lead-id-form">
+          <input id="lead-id-input" class="lead-id-input" type="text" inputmode="numeric" autocomplete="off" placeholder="Enter lead id" />
+          <button id="lead-id-fetch-btn" class="lead-id-fetch-btn" type="submit">Fetch</button>
+        </form>
       </div>
-      <div id="lead-detail-status" class="lead-detail-status">Lead detail check will run on Ambak lead pages.</div>
+      <div id="lead-detail-status" class="lead-detail-status">Enter a lead id and fetch details.</div>
+      <button id="lead-detail-toggle-btn" class="lead-detail-toggle" type="button" aria-expanded="true">Hide details</button>
       <div id="lead-detail-data" class="lead-detail-data"></div>
       <div class="capture-controls">
         <button id="toggle-btn" class="control-btn">Start Capture</button>
@@ -970,6 +1116,6 @@
   </div>
 
   <script src="lead-detail-api.js"></script>
-  <script src="sidepanel.js"></script>
+  <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

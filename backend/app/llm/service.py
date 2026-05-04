@@ -10,6 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.types import SecretStr
 
 from app.core.config import get_settings
+from app.services.lead_detail_context import build_lead_detail_chat_context
+from app.services.lead_detail_context import build_lead_context
+from app.services.lead_detail_context import build_lead_field_index_prompt
+from app.services.lead_detail_context import discover_lead_field_paths
+from app.services.lead_detail_context import execute_lead_query_plan
+from app.services.lead_detail_context import find_direct_dre_document_answer
+from app.services.lead_detail_context import find_direct_lead_detail_answer
+from app.services.lead_detail_context import format_priority_missing_context
+from app.services.lead_detail_context import looks_like_document_question
+from app.services.lead_detail_context import normalize_lead_detail_payload
+from app.services.lead_detail_context import sanitize_lead_query_plan
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.schema_registry import SchemaFieldSpec
 from app.services.schema_registry import get_schema_registry
@@ -50,9 +61,11 @@ Use the provided context to answer the user's question directly in concise, poli
 
 CRITICAL RULES:
 1. If relevant context is provided, prioritize it for your answer.
-2. If you don't know the answer from the context, state it politely but still offer general help.
-3. Do not mention internal implementation details or source filenames.
-4. Use Roman script only. Never use Devanagari.
+2. If the user asks about lead documents, answer specifically from the "DRE document status" section.
+3. For document questions, do not invent uploaded or missing documents. If DRE document status is unavailable, say that clearly and include the provided error if present.
+4. If you don't know the answer from the context, state it politely but still offer general help.
+5. Do not mention internal implementation details or source filenames.
+6. Use Roman script only. Never use Devanagari.
 """
 
 
@@ -105,6 +118,7 @@ def build_stream_reply_prompt(
     context_summary: str,
     known_entities: dict | None,
     last_suggestion: str = "",
+    priority_missing_fields: list[dict] | None = None,
 ) -> str:
     """Build the real-time copilot prompt.
 
@@ -114,12 +128,19 @@ def build_stream_reply_prompt(
     `last_suggestion` is passed so the model is explicitly told not to repeat it.
     """
     known_str = json.dumps(known_entities or {}, ensure_ascii=False)
+    priority_context = format_priority_missing_context(priority_missing_fields or [])
+    priority_instruction = (
+        "\nHigh-priority missing offer fields. If the conversation needs a next step, ask for these before lower-priority fields:\n"
+        f"{priority_context}"
+        if priority_context
+        else ""
+    )
     anti_repeat = (
         f"\nDo NOT repeat this suggestion: {last_suggestion}" if last_suggestion else ""
     )
     return (
         f"{STREAM_SYSTEM_PROMPT}\n\n"
-        f"Already known customer fields (do NOT re-extract these): {known_str}\n"
+        f"Already known customer fields (do NOT re-extract these): {known_str}{priority_instruction}\n"
         f"customer_last_utterance: {customer_last_utterance}\n"
         f"agent_last_utterance: {agent_last_utterance}\n"
         f"context_summary: {context_summary}{anti_repeat}\n\n"
@@ -235,10 +256,11 @@ Return JSON with extracted fields, e.g., {{"loan_amount": "1800000"}} if applica
 def build_chat_prompt(
     message: str, 
     history: list[dict[str, str]] | None = None,
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    lead_context: Optional[str] = None,
 ) -> str:
     history_lines: list[str] = []
-    for item in history or []:
+    for item in (history or [])[-3:]:
         role = (item.get("role") or "").strip().lower()
         content = (item.get("content") or "").strip()
         if not content:
@@ -248,7 +270,14 @@ def build_chat_prompt(
 
     history_block = "\n".join(history_lines) if history_lines else "No prior chat history."
     
-    context_block = f"\nRelevant Context:\n{context}\n" if context else ""
+    context_sections = []
+    if lead_context:
+        context_sections.append(f"Loaded Lead Details:\n{lead_context}")
+    if context:
+        context_sections.append(f"Relevant Policy Context:\n{context}")
+    context_block = "\n\n".join(context_sections)
+    if context_block:
+        context_block = f"\n{context_block}\n"
     
     return f"""{CHAT_SYSTEM_PROMPT}
 {context_block}
@@ -260,6 +289,195 @@ User message:
 
 Assistant reply:
 """
+
+
+
+
+def combine_lead_search_sources(lead_detail: dict | None, lead_facts: dict | None) -> dict | None:
+    if not isinstance(lead_detail, dict) and not isinstance(lead_facts, dict):
+        return None
+    combined: dict = {}
+    if isinstance(lead_facts, dict):
+        combined.update(lead_facts)
+    if isinstance(lead_detail, dict):
+        combined.update(lead_detail)
+    return combined or None
+
+def build_lead_query_plan_prompt(message: str, field_index: str) -> str:
+    return f"""You map a user chat message to a structured query over loaded Ambak lead data.
+
+Return strict JSON only:
+{{"action":"missing_fields|fields|next_step|fallback","fields":[],"confidence":0.0,"scope_hint":null}}
+
+Rules:
+- Return only the data explicitly asked for. Never expand the answer to nearby or related fields.
+- Only return fields when highly confident. Prefer empty fields over wrong fields.
+- fields must contain exact paths visible in the field index. Never invent fields.
+- Never extract raw words as filters.
+- scope_hint may be one of: property, income, credit, loan, or null.
+- Use "fields" for specific field questions, including natural language and Hinglish. If the user asks for one attribute such as name, mobile, email, status, amount, date, city, or bank name, return only that exact path.
+- The word "details" alone does not mean section if the user also names a specific attribute. Example: "bank name details" is still a single field.
+- Use "missing_fields" when the user asks which profile/customer/lead fields are missing.
+- Set "priority_only": true when the user asks for priority/high-priority missing fields. Keep it false when they ask for all missing fields in a scope.
+- For broad or ambiguous missing-field questions, return fields: [] and low confidence.
+- Use "next_step" when the user asks what to ask next, next action, next step, or follow-up suggestion for this lead.
+- Use "fallback" only when the question is not about loaded lead data.
+- Do not answer with values. The backend will verify values locally.
+
+Examples:
+- bank name? -> {{"action":"fields","fields":["lead_details.bank.banklang.bank_name"],"confidence":0.95,"scope_hint":null}}
+- rm mobile -> {{"action":"fields","fields":["rmdetails.mobile"],"confidence":0.95,"scope_hint":null}}
+- which priority property details are missing? -> {{"action":"missing_fields","fields":[],"confidence":0.8,"scope_hint":"property","priority_only":true}}
+- priority details konsi missing hai? -> {{"action":"missing_fields","fields":[],"confidence":0.2,"scope_hint":null,"priority_only":true}}
+
+Loaded field index:
+{field_index}
+
+User message:
+{message}
+
+JSON:
+"""
+
+
+def enrich_lead_query_plan(plan: dict | None, message: str) -> dict | None:
+    if not isinstance(plan, dict):
+        return plan
+
+    if str(plan.get("action") or "").strip().lower() != "missing_fields":
+        return plan
+
+    priority_only = bool(plan.get("priority_only"))
+    normalized_message = message.lower()
+    if "priority" in normalized_message or "high priority" in normalized_message or "highest priority" in normalized_message:
+        priority_only = True
+
+    deterministic_filters = (
+        _priority_missing_filters(_normalize_intent_text(message))
+        if priority_only
+        else {}
+    )
+
+    return {
+        **plan,
+        "priority_only": priority_only,
+        **{
+            key: value
+            for key, value in deterministic_filters.items()
+            if not plan.get("fields") and not plan.get("scope_hint")
+        },
+    }
+
+
+NEXT_STEP_REFRESH_CONFIRMATION = (
+    "Last next step loaded hai. Kya database/lead details update hue hain? "
+    "Yes par click karenge to latest lead data fetch karke next step dobara suggest karunga. "
+    "No par click karenge to same data ke basis par previous next step dikhaunga."
+)
+
+
+def _normalize_intent_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+
+
+def is_next_step_query(message: str) -> bool:
+    normalized = _normalize_intent_text(message)
+    if not normalized:
+        return False
+    return (
+        "next step" in normalized
+        or "next action" in normalized
+        or "next follow up" in normalized
+        or "what to ask next" in normalized
+        or "next kya" in normalized
+    )
+
+
+def is_no_refresh_confirmation(message: str) -> bool:
+    normalized = _normalize_intent_text(message)
+    tokens = set(normalized.split())
+    return bool(tokens & {"no", "same"}) or "not updated" in normalized or "no refresh" in normalized
+
+
+PRIORITY_MISSING_SCOPE_HINTS = (
+    ("property", "property"),
+    ("credit", "credit"),
+    ("cibil", "credit"),
+    ("income", "income"),
+    ("salary", "income"),
+    ("profession", "income"),
+    ("bt", "loan"),
+    ("existing loan", "loan"),
+    ("previous loan", "loan"),
+    ("prev", "loan"),
+    ("emi", "loan"),
+    ("roi", "loan"),
+    ("tenure", "loan"),
+)
+
+
+PRIORITY_MISSING_FIELD_HINTS = (
+    ("builder", "property_details.builder_id"),
+    ("project", "property_details.project_id"),
+    ("agreement", "property_details.agreement_type"),
+    ("registration", "property_details.registration_value"),
+    ("pancard", "customer.pancard_no"),
+    ("pan", "customer.pancard_no"),
+)
+
+
+def _priority_missing_filters(normalized_message: str) -> dict[str, Any]:
+    padded = f" {normalized_message} "
+    fields: list[str] = []
+    for needle, field in PRIORITY_MISSING_FIELD_HINTS:
+        if f" {needle} " in padded and field not in fields:
+            fields.append(field)
+    if fields:
+        return {"fields": fields, "confidence": 0.9}
+
+    for needle, scope_hint in PRIORITY_MISSING_SCOPE_HINTS:
+        if f" {needle} " in padded:
+            return {"scope_hint": scope_hint, "confidence": 0.9}
+
+    return {"fields": [], "confidence": 0.2, "scope_hint": None}
+
+
+def build_deterministic_lead_query_plan(message: str) -> dict | None:
+    normalized = _normalize_intent_text(message)
+    if not normalized:
+        return None
+
+    tokens = set(normalized.split())
+    asks_missing = bool(tokens & {"missing", "pending", "empty", "blank", "null"})
+    asks_priority = bool(tokens & {"priority", "high", "highest", "top"})
+    asks_documents = bool(tokens & {"doc", "docs", "document", "documents"})
+    if asks_missing and not asks_documents:
+        return {
+            "action": "missing_fields",
+            "priority_only": asks_priority,
+            **(_priority_missing_filters(normalized) if asks_priority else {"fields": [], "confidence": 0.9, "scope_hint": None}),
+        }
+
+    return None
+
+
+def _last_next_step_answer(history: list[dict[str, str]] | None) -> str:
+    for turn in reversed(history or []):
+        if turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "").strip()
+        if content.startswith("Next step:"):
+            return content
+    return ""
+
+
+def _last_assistant_asked_refresh_confirmation(history: list[dict[str, str]] | None) -> bool:
+    for turn in reversed(history or []):
+        if turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "").lower()
+        return "database/lead details update" in content
+    return False
 
 
 def build_db_insert_question_prompt(
@@ -298,7 +516,13 @@ Task:
 class LLMService:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.rag_service = RAGService()
+        self._rag_service: RAGService | None = None
+
+    @property
+    def rag_service(self) -> RAGService:
+        if self._rag_service is None:
+            self._rag_service = RAGService()
+        return self._rag_service
 
     def _resolve_model_name(self, model_name: str | None, default: str) -> str:
         resolved = model_name or default
@@ -358,6 +582,7 @@ class LLMService:
         context_summary: str = "",
         known_entities: dict | None = None,
         last_suggestion: str = "",
+        priority_missing_fields: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         prompt = build_stream_reply_prompt(
             utterance=utterance,
@@ -367,6 +592,7 @@ class LLMService:
             context_summary=context_summary,
             known_entities=known_entities,
             last_suggestion=last_suggestion,
+            priority_missing_fields=priority_missing_fields,
         )
         async for chunk in self.stream_text(prompt, model_name=model_name):
             yield chunk
@@ -490,26 +716,197 @@ class LLMService:
         message: str,
         history: list[dict[str, str]] | None = None,
         *,
+        lead_id: str | int | None = None,
+        lead_detail: dict | None = None,
+        lead_facts: dict | None = None,
+        lead_missing_fields: list[dict] | None = None,
+        lead_refreshed: bool = False,
+        lead_dre_documents: object | None = None,
+        lead_document_status: object | None = None,
+        lead_dre_document_error: str | None = None,
+        lead_context: dict | None = None,
         model_name: str | None = None,
     ) -> str:
+        result = await self.generate_chat_reply_payload(
+            message,
+            history,
+            lead_id=lead_id,
+            lead_detail=lead_detail,
+            lead_facts=lead_facts,
+            lead_missing_fields=lead_missing_fields,
+            lead_refreshed=lead_refreshed,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_context=lead_context,
+            model_name=model_name,
+        )
+        return str(result.get("reply") or "")
+
+    async def generate_chat_reply_payload(
+        self,
+        message: str,
+        history: list[dict[str, str]] | None = None,
+        *,
+        lead_id: str | int | None = None,
+        lead_detail: dict | None = None,
+        lead_facts: dict | None = None,
+        lead_missing_fields: list[dict] | None = None,
+        lead_refreshed: bool = False,
+        lead_dre_documents: object | None = None,
+        lead_document_status: object | None = None,
+        lead_dre_document_error: str | None = None,
+        lead_context: dict | None = None,
+        model_name: str | None = None,
+    ) -> dict:
         timings: dict[str, float] = {}
         overall_start = time.perf_counter()
+        normalized_lead_detail = normalize_lead_detail_payload(lead_detail)
+        canonical_lead_context = lead_context or build_lead_context(
+            lead_id=lead_id,
+            lead_detail=normalized_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_document_status=lead_document_status,
+            lead_facts=lead_facts,
+        )
+        searchable_lead_detail = combine_lead_search_sources(
+            normalized_lead_detail or canonical_lead_context.get("lead_detail"),
+            canonical_lead_context.get("facts") or lead_facts,
+        )
+        previous_next_step = _last_next_step_answer(history)
+        is_document_question = looks_like_document_question(message)
+
+        direct_document_answer = find_direct_dre_document_answer(
+            message,
+            lead_detail=normalized_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_context=canonical_lead_context,
+        )
+        if direct_document_answer:
+            logger.info(
+                "Lead chat answered directly from document context: message_len=%d total_ms=%.2f",
+                len(message),
+                (time.perf_counter() - overall_start) * 1000.0,
+            )
+            return {"reply": direct_document_answer}
+
+        direct_lead_answer = find_direct_lead_detail_answer(
+            message,
+            searchable_lead_detail,
+            lead_context=canonical_lead_context,
+        )
+        if direct_lead_answer:
+            logger.info(
+                "Lead chat answered directly from loaded lead context: message_len=%d total_ms=%.2f",
+                len(message),
+                (time.perf_counter() - overall_start) * 1000.0,
+            )
+            return {"reply": direct_lead_answer}
+
+        if is_no_refresh_confirmation(message) and previous_next_step and _last_assistant_asked_refresh_confirmation(history):
+            return {
+                "reply": previous_next_step,
+                "used_cached_next_step": True,
+            }
+
+        if searchable_lead_detail and is_next_step_query(message) and previous_next_step and not lead_refreshed:
+            return {
+                "reply": NEXT_STEP_REFRESH_CONFIRMATION,
+                "needs_lead_refresh_confirmation": True,
+                "previous_next_step": previous_next_step,
+            }
+
+        if searchable_lead_detail:
+            plan_start = time.perf_counter()
+            lead_plan = build_deterministic_lead_query_plan(message)
+            if lead_plan is None:
+                field_index = build_lead_field_index_prompt(searchable_lead_detail)
+                lead_plan = await self.generate_json(
+                    build_lead_query_plan_prompt(message, field_index),
+                    model_name=model_name or self.settings.llm_summary_model,
+                )
+            lead_plan = enrich_lead_query_plan(lead_plan, message)
+            all_fields = discover_lead_field_paths(searchable_lead_detail, lead_missing_fields)
+            lead_plan = sanitize_lead_query_plan(lead_plan, all_fields)
+            confidence = lead_plan.get("confidence") if isinstance(lead_plan, dict) else None
+            filtering_applied = bool(
+                isinstance(lead_plan, dict)
+                and (
+                    lead_plan.get("fields")
+                    or lead_plan.get("scope_hint")
+                    or lead_plan.get("scope_prefixes")
+                    or lead_plan.get("field_groups")
+                )
+            )
+            logger.info(
+                "Lead chat query plan: lead_id=%s message=%r plan=%s confidence=%s filtering_applied=%s",
+                lead_id,
+                message,
+                lead_plan,
+                confidence,
+                filtering_applied,
+            )
+            lead_answer = execute_lead_query_plan(
+                searchable_lead_detail,
+                lead_plan,
+                lead_missing_fields=lead_missing_fields,
+            )
+            timings["lead_plan_ms"] = (time.perf_counter() - plan_start) * 1000.0
+            if lead_answer:
+                logger.info(
+                    "Lead chat planned answer completed: lead_id=%s action=%s plan_ms=%.2f total_ms=%.2f reply_chars=%d",
+                    lead_id,
+                    lead_plan.get("action") if isinstance(lead_plan, dict) else None,
+                    timings["lead_plan_ms"],
+                    (time.perf_counter() - overall_start) * 1000.0,
+                    len(lead_answer),
+                )
+                return {"reply": lead_answer}
+
+            logger.info(
+                "Lead chat planner fell back: lead_id=%s plan=%s plan_ms=%.2f",
+                lead_id,
+                lead_plan,
+                timings["lead_plan_ms"],
+            )
 
         # 1. Retrieve relevant context
         retrieval_start = time.perf_counter()
-        docs = await self.rag_service.hybrid_search(message)
-        timings["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000.0
-        self.rag_service.log_retrieved_chunks(message, docs, timings["retrieval_ms"])
+        if is_document_question:
+            docs = []
+            timings["retrieval_ms"] = 0.0
+            context_str = "No relevant policy documents needed for this lead document question."
+        else:
+            docs = await self.rag_service.hybrid_search(message)
+            timings["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000.0
+            self.rag_service.log_retrieved_chunks(message, docs, timings["retrieval_ms"])
 
-        context_parts = []
-        for doc in docs:
-            context_parts.append(doc.page_content)
-        
-        context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
+            context_parts = []
+            for doc in docs:
+                context_parts.append(doc.page_content)
+
+            context_str = "\n\n".join(context_parts) if context_parts else "No relevant policy documents found."
+        lead_context = build_lead_detail_chat_context(
+            lead_id=lead_id,
+            lead_detail=searchable_lead_detail,
+            lead_dre_documents=lead_dre_documents,
+            lead_document_status=lead_document_status,
+            lead_dre_document_error=lead_dre_document_error,
+            lead_context=canonical_lead_context,
+            document_only=is_document_question,
+        )
         
         # 2. Build prompt with context
         prompt_start = time.perf_counter()
-        prompt = build_chat_prompt(message, history, context=context_str)
+        prompt = build_chat_prompt(
+            message,
+            history,
+            context=context_str,
+            lead_context=lead_context,
+        )
         timings["prompt_ms"] = (time.perf_counter() - prompt_start) * 1000.0
         logger.info(
             "RAG prompt prepared: message_len=%d history_turns=%d context_chars=%d prompt_chars=%d prompt_ms=%.2f",
@@ -531,4 +928,4 @@ class LLMService:
             timings["total_ms"],
             len(reply.strip()),
         )
-        return reply.strip()
+        return {"reply": reply.strip()}

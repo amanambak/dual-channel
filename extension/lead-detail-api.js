@@ -51,97 +51,353 @@ const LeadDetailApi = (() => {
 
   function buildLeadDetailQuery(leadId) {
     return `{
-      get_lead_detail(api_called_by: web, lead_id: ${leadId}) {
-        id
-        ref_lead_id
-        loan_type
-        loan_sub_type
-        loan_sub_type_name
-        status_id
-        sub_status_id
-        bucket_id
-        kyc_status
-        followup_date
-        followup_type
-        followup_status
-        partner_name
-        partner_mobile
-        partner_email
-        assign_user {
-          id
-          name
-          email
-          mobile
-        }
-        rmdetails {
-          id
-          label
-          mobile
-          email
-        }
-        status_info {
-          statuslang {
-            status_name
-          }
-        }
-        sub_status_info {
-          substatuslang {
-            sub_status_name
-          }
-        }
-        customer {
-          customer_id
-          first_name
-          last_name
-          mobile
-          email
-          pancard_no
-          dob
-          gender
-          marital_status
-          occupation
-          official_email_id
-          employment {
-            employer_name
-            designation
-            gross_monthly_income
-            year_with_company
-          }
-          bank_details {
-            bank_id
-            branch_name
-            account_name
-            account_type
-          }
-        }
-        lead_details {
-          lead_id
-          bank_id
-          loan_amount
-          login_amount
-          approved_amount
-          tenure
-          annual_income
-          monthly_salary
-          cibil_score
-          company_name
-          profession
-          property_city
-          property_state
-          property_address1
-          property_address2
-          property_pincode
-          property_value
-          expected_property_value
-          bank {
-            id
-            banklang {
-              bank_name
-            }
-          }
-        }
+  get_lead_detail(api_called_by: web, lead_id: ${leadId}) {
+    id
+    ref_lead_id
+    is_offer_send
+    credit_approval_required
+    is_partial_login
+    is_semi_login
+    is_legal_doc
+    partner_id
+    parent_partner_id
+    assign_to
+    verifier_id
+    is_login_verified
+    is_sanction_verified
+    reject_reason_id
+    rejection_type
+    is_disbursal_verified
+    can_verify_without_kyc
+    is_status_verified_login
+    is_status_verified_sanction
+    is_status_verified_disbursal
+    created_by
+    pre_login_bank_id
+    loan_type
+    loan_sub_type
+    loan_sub_type_name
+    tranche_type
+    fulfillment_type
+    followup_date
+    followup_type
+    kyc_status
+    is_pending_doc_share
+    followup_status
+    is_periskope_allowed
+    assign_to
+    is_login_confirmation_send
+    doc_status
+    bucket_id
+    status_id
+    created_date
+    sub_status_id
+    last_sub_status_id
+    is_qualified
+    is_otp_verified
+    is_revisit
+    docs_collected
+    last_updated_date
+    updated_date
+    credit_pending
+    credit_status
+    reportingMonthClosedTranches
+    hierarchy_details
+    lead_breadcrumb {
+      name
+      status
+      offers {
+        label
+        status
+        uploaded_at
+        __typename
       }
-    }`;
+      docs {
+        label
+        status
+        note
+        uploaded_at
+        __typename
+      }
+      __typename
+    }
+    disbursement_done
+    co_applicant {
+      coapplicant_dre_executed: dre_executed
+      id
+      __typename
+    }
+    customer {
+      customer_id
+      customer_dre_executed: dre_executed
+      recommended_docs {
+        id
+        lead_id
+        doc_id
+        parent_doc_id
+        is_doc_uploaded
+        updated_by_source
+        status
+        customer_type
+        customer_id
+        is_recommended
+        __typename
+      }
+      __typename
+    }
+    lead_details {
+      bank {
+        id
+        dsa_code
+        is_gross_code
+        banklang {
+          bank_name
+          __typename
+        }
+        __typename
+      }
+      lead_dre_executed: dre_executed
+      lead_id
+      bank_id
+      verifier_id
+      login_amount
+      remarks
+      no_of_emi
+      tenure
+      loan_amount
+      is_property_identified
+      usage_type
+      occupancy_status
+      property_usage
+      agreement_type
+      property_type
+      property_sub_type
+      property_agreement_value
+      expected_property_value
+      property_value
+      property_authority_id
+      property_dda_registration
+      property_dda_group
+      login_number
+      approval_date
+      login_date
+      loan_amount
+      approved_emi
+      approval_date
+      approval_number
+      approved_amount
+      is_calling
+      call_status
+      calling_tag
+      calling_reason_id
+      subvension_type_id
+      subvention_applicable
+      subvention_remarks
+      subvension_amount
+      expected_registration_date
+      is_expected_registration_date
+      user_paid_token_amount
+      is_ats_bba_executed
+      sheet_details
+      subvention_info {
+        id
+        header_id
+        amount
+        percentage
+        lead_id
+        __typename
+      }
+      cross_sell_type_id
+      cross_sell_product_amount
+      check_oc_cc
+      ready_for_registration
+      expected_login_date
+      expected_approved_date
+      expected_disbursed_date
+      lod_applied_date
+      lod_apply
+      offer_share_date
+      house_item_value
+      approved_roi
+      is_offer
+      offer_bank
+      offer_loan_amount
+      offer_roi
+      reported_login_date
+      reported_sanction_date
+      reported_sanction_amount
+      reported_login_amount
+      __typename
+    }
+    checklists {
+      id
+      lead_id
+      checklist_id
+      sub_status_id
+      is_active
+      checklist_complete_date
+      checklist_sub_status_id
+      checklist_query_sub_status_id
+      checklist_remark
+      checklist_pendency_on
+      checklist_followup_date
+      checklist_follow_up_with
+      checklist_sub_status {
+        id
+        name
+        query_type
+        is_final_status
+        checklist_id
+        __typename
+      }
+      __typename
+    }
+    splitpayment {
+      id
+      lead_id
+      loan_type
+      product_sub_type
+      disbursed_id
+      disbursed_date
+      disbursed_amount
+      disbursed_tenure
+      disbursed_date
+      is_tranch_verified
+      transaction_done
+      transaction_mode
+      transaction_date
+      payout_expected_date
+      calc_payout_expected_date
+      pdd_expected_date
+      transaction_expected_date
+      transaction_id
+      is_pdd_pendency
+      is_txn_pendency
+      is_mis_pendency
+      is_payin_pendency
+      pdd_status
+      pdd_remark
+      pdd_date
+      pay_in_done
+      pay_in_confirm_mode
+      pay_in_confirm_date
+      pay_in_confirm_amount
+      is_transaction_verified
+      is_pdd_verified
+      is_payout_verified
+      is_pay_in_verified
+      pay_in_confirm_id
+      disbursed_roi
+      reporting_month
+      reporting_year
+      reported_date
+      reported_disbursed_amount
+      ambak_calculation
+      subvention_amount
+      subvention_remarks
+      tranche_payout_eta {
+        id
+        tranche_id
+        eta_date
+        status
+        created_at
+        updated_at
+        __typename
+      }
+      __typename
+    }
+    deletiontranche {
+      id
+      tranche_id
+      lead_id
+      loan_type
+      disbursed_id
+      disbursed_amount
+      disbursed_date
+      disbursed_tenure
+      is_tranch_verified
+      deletion_type
+      deletion_reason
+      deleted_date
+      __typename
+    }
+    lead_status_history {
+      status_id
+      sub_status_id
+      __typename
+    }
+    status_info {
+      statuslang {
+        status_name
+        __typename
+      }
+      __typename
+    }
+    sub_status_info {
+      substatuslang {
+        sub_status_name
+        __typename
+      }
+      __typename
+    }
+    leaddocs {
+      id
+      lead_id
+      doc_id
+      parent_doc_id
+      doc_status
+      customer_type
+      customer_id
+      ext
+      tranche_id
+      docmaster {
+        __typename
+      }
+      __typename
+    }
+    insurance_lead_details {
+      id
+      ref_id
+      insurance_url
+      created_date
+      last_updated_date
+      insurance_type
+      selected_premium
+      content_sum_insured
+      lead_status_id
+      insurance_lead_status {
+        id
+        label
+        __typename
+      }
+      __typename
+    }
+    whatsAppUnread {
+      unread_count
+      latest_created_date
+      __typename
+    }
+    leadSourceInfo {
+      sourceId
+      source
+      subSourceId
+      subSource
+      __typename
+    }
+    lead_bt_info {
+      lead_id
+      previous_loan_amount
+      previous_existing_emi
+      previous_tenure
+      previous_loan_date
+      previous_roi
+      loan_topup_required_amount
+      __typename
+    }
+    __typename
+  }
+}
+`;
   }
 
   function normalizeBearerToken(token) {
@@ -151,15 +407,68 @@ const LeadDetailApi = (() => {
     return String(token).replace(/^Bearer\s+/i, '').trim();
   }
 
-  async function fetchLeadDetail({ leadId, token }) {
-    const normalizedLeadId = normalizeLeadId(leadId);
-    const bearerToken = normalizeBearerToken(token);
-
-    if (!normalizedLeadId) {
-      throw new Error('Lead ID is required to fetch lead details.');
+  function getPrimaryLeadDetail(detail) {
+    if (Array.isArray(detail)) {
+      return detail.find((item) => item && typeof item === 'object') || null;
     }
+    return detail && typeof detail === 'object' ? detail : null;
+  }
+
+  function buildLeadDreDocumentQuery() {
+    return `mutation getLeadDreDocument($lead_id: Int!, $type: String!, $customer_id: Int, $coapplicant_id: Int) {
+  get_lead_dre_document(
+    lead_id: $lead_id
+    type: $type
+    customer_id: $customer_id
+    coapplicant_id: $coapplicant_id
+  ) {
+    untagged_images {
+      id
+      ldoc_id
+      lead_id
+      doc_id
+      status
+      customer_id
+      type
+      customer_type
+      created_date
+      updated_date
+      parent_doc_id
+      child_name
+      parent_name
+      tranche_id
+      ai_tagged_doc_id
+      previous_tagged_doc_id
+      __typename
+    }
+    cam_report {
+      id
+      ldoc_id
+      lead_id
+      doc_id
+      status
+      customer_id
+      type
+      created_date
+      updated_date
+      parent_doc_id
+      child_name
+      parent_name
+      ai_tagged_doc_id
+      previous_tagged_doc_id
+      __typename
+    }
+    legal_report
+    documents
+    __typename
+  }
+}`;
+  }
+
+  async function postGraphql({ token, body, errorLabel }) {
+    const bearerToken = normalizeBearerToken(token);
     if (!bearerToken) {
-      throw new Error('Ambak auth token was not found on the lead page.');
+      throw new Error('Ambak access token was not found in loan-stage localStorage.');
     }
 
     const response = await fetch(API_URL, {
@@ -170,16 +479,32 @@ const LeadDetailApi = (() => {
         authorization: `Bearer ${bearerToken}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ variables: {}, query: buildLeadDetailQuery(normalizedLeadId) }),
+      body: JSON.stringify(body),
     });
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload?.message || `Lead detail API failed with HTTP ${response.status}.`);
+      throw new Error(payload?.message || `${errorLabel} failed with HTTP ${response.status}.`);
     }
     if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-      throw new Error(payload.errors.map((error) => error.message).filter(Boolean).join('; ') || 'Lead detail API returned errors.');
+      throw new Error(payload.errors.map((error) => error.message).filter(Boolean).join('; ') || `${errorLabel} returned errors.`);
     }
+
+    return payload;
+  }
+
+  async function fetchLeadDetail({ leadId, token }) {
+    const normalizedLeadId = normalizeLeadId(leadId);
+
+    if (!normalizedLeadId) {
+      throw new Error('Lead ID is required to fetch lead details.');
+    }
+
+    const payload = await postGraphql({
+      token,
+      errorLabel: 'Lead detail API',
+      body: { variables: {}, query: buildLeadDetailQuery(normalizedLeadId) },
+    });
 
     const leadDetail = payload?.data?.get_lead_detail || null;
     if (!leadDetail) {
@@ -189,9 +514,146 @@ const LeadDetailApi = (() => {
     return { leadId: normalizedLeadId, detail: leadDetail };
   }
 
+  async function fetchLeadDreDocuments({ leadId, token, type = 'customer', customerId = null, coapplicantId = null }) {
+    const normalizedLeadId = normalizeLeadId(leadId);
+    const normalizedCustomerId = normalizeLeadId(customerId);
+    const normalizedCoapplicantId = normalizeLeadId(coapplicantId);
+    const normalizedType = String(type || '').trim();
+
+    if (!normalizedLeadId) {
+      throw new Error('Lead ID is required to fetch DRE documents.');
+    }
+    if (!normalizedType) {
+      throw new Error('DRE document customer type is required.');
+    }
+
+    const payload = await postGraphql({
+      token,
+      errorLabel: 'Lead DRE document API',
+      body: {
+        operationName: 'getLeadDreDocument',
+        variables: {
+          lead_id: normalizedLeadId,
+          type: normalizedType,
+          customer_id: normalizedCustomerId,
+          coapplicant_id: normalizedCoapplicantId,
+        },
+        query: buildLeadDreDocumentQuery(),
+      },
+    });
+
+    return {
+      leadId: normalizedLeadId,
+      type: normalizedType,
+      customerId: normalizedCustomerId,
+      coapplicantId: normalizedCoapplicantId,
+      documents: payload?.data?.get_lead_dre_document || null,
+    };
+  }
+
+  function formatMissingFieldLabel(path) {
+    const leaf = String(path || '').split('.').pop().replace(/\[\d+\]/g, '');
+    return leaf.replace(/_/g, ' ').replace(/\s+/g, ' ').trim().replace(/(^|\s)\S/g, (char) => char.toUpperCase());
+  }
+
+  function buildLeadFacts(detail, maxFields = 2000) {
+    const facts = {};
+    const leadRecord = getPrimaryLeadDetail(detail);
+
+    function visit(value, path = '') {
+      if (value === undefined || Object.keys(facts).length >= maxFields) {
+        return;
+      }
+      if (!path && value === null) {
+        return;
+      }
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          if (path) {
+            facts[path] = [];
+          }
+          return;
+        }
+        value.slice(0, 10).forEach((item, index) => visit(item, path ? `${path}[${index}]` : `[${index}]`));
+        return;
+      }
+      if (value !== null && typeof value === 'object') {
+        const entries = Object.entries(value);
+        if (entries.length === 0) {
+          if (path) {
+            facts[path] = {};
+          }
+          return;
+        }
+        entries.forEach(([key, nestedValue]) => {
+          visit(nestedValue, path ? `${path}.${key}` : key);
+        });
+        return;
+      }
+      facts[path] = value === null ? null : String(value);
+    }
+
+    visit(leadRecord);
+    return facts;
+  }
+
+  function buildLeadMissingFields(detail, maxFields = 500) {
+    const missing = [];
+    const leadRecord = getPrimaryLeadDetail(detail);
+
+    function addMissing(path, reason) {
+      if (!path || path.endsWith('__typename') || missing.length >= maxFields) {
+        return;
+      }
+      missing.push({ path, label: formatMissingFieldLabel(path), reason });
+    }
+
+    function visit(value, path = '') {
+      if (missing.length >= maxFields || path.endsWith('__typename')) {
+        return;
+      }
+      if (value === null || value === undefined) {
+        addMissing(path, value === null ? 'null' : 'undefined');
+        return;
+      }
+      if (typeof value === 'string' && value.trim() === '') {
+        addMissing(path, 'empty_string');
+        return;
+      }
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          addMissing(path, 'empty_array');
+          return;
+        }
+        value.slice(0, 25).forEach((item, index) => visit(item, path ? `${path}[${index}]` : `[${index}]`));
+        return;
+      }
+      if (typeof value === 'object') {
+        const entries = Object.entries(value);
+        if (entries.length === 0) {
+          addMissing(path, 'empty_object');
+          return;
+        }
+        entries.forEach(([key, nestedValue]) => {
+          visit(nestedValue, path ? `${path}.${key}` : key);
+        });
+      }
+    }
+
+    visit(leadRecord);
+    return missing;
+  }
+
   return {
+    buildLeadFacts,
+    buildLeadMissingFields,
     extractLeadIdFromUrl,
+    fetchLeadDreDocuments,
     fetchLeadDetail,
+    getPrimaryLeadDetail,
     isLoanDetailUrl,
+    normalizeLeadId,
   };
 })();
+
+self.LeadDetailApi = LeadDetailApi;
