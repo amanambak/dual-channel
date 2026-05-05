@@ -55,6 +55,7 @@ async def finalize_utterance(session) -> None:
     )
     if len(session.state.messages) > 1000:
         session.state.messages = session.state.messages[-1000:]
+    await session.send_json({"type": "utterance_end"})
     await session.send_model(
         UtteranceCommittedEvent(utteranceId=utterance_id, text=text, speaker=speaker)
     )

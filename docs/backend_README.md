@@ -2,19 +2,19 @@
 
 ## Overview
 
-The backend is a FastAPI service that receives live audio from the extension, streams it to Deepgram, finalizes utterances, runs schema-driven extraction, and emits streaming AI suggestions back to the browser.
+The backend is a FastAPI service that receives live audio from the extension, streams it to OpenAI Realtime transcription, finalizes utterances, runs schema-driven extraction, and emits streaming AI suggestions back to the browser.
 
 ## Current Behavior
 
 - Live audio enters through a browser WebSocket session
-- Deepgram returns interim and final transcript events
-- Deepgram listens with `model=nova-3`, `punctuate=true`, `interim_results=true`, and channel-aware audio
+- OpenAI Realtime returns transcript delta and completed events
+- OpenAI Realtime listens with `gpt-4o-transcribe` by default and server-side VAD
 - Final transcript chunks are buffered briefly, merged, and filtered
 - High-confidence local updates seed obvious fields like location, salary, and loan amount before the LLM runs
 - Meaningful utterances trigger schema extraction and then suggestion generation in sequence
 - Customer fields found in conversation are stored using exact schema variable names
 - Session summary returns customer info as key-value pairs
-- The side panel also has a chat-only mode that calls the backend without Deepgram or session extraction
+- The side panel also has a chat-only mode that calls the backend without live transcription or session extraction
 
 ## Run
 
@@ -26,8 +26,11 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## Environment
 
-- `DEEPGRAM_API_KEY`
-- `DEEPGRAM_WS_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_REALTIME_WS_URL`
+- `OPENAI_TRANSCRIPTION_MODEL`
+- `OPENAI_TRANSCRIPTION_LANGUAGE`
+- `OPENAI_TRANSCRIPTION_PROMPT`
 - `LLM_API_KEY` or legacy `GEMINI_API_KEY` / `GOOGLE_API_KEY`
 - `LLM_MODEL`
 - `LLM_SUMMARY_MODEL`
@@ -69,15 +72,16 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `backend/app/services/session_response.py`
 - `backend/app/graph/`
 - `backend/app/llm/service.py`
-- `backend/app/services/deepgram_client.py`
+- `backend/app/services/openai_realtime_client.py`
 - `backend/app/services/schema_registry.py`
 - `backend/app/services/schema_normalizer.py`
 
 ## Notes
 
 - Session state is in-memory only
-- Deepgram query params are normalized to strings before the WebSocket handshake
-- Punctuation is enabled for readability; smart formatting remains off for lower latency
+- OpenAI transcript deltas are accumulated per Realtime item before final transcript events arrive
+- The Realtime client configures transcription with `session.update`
+- Browser capture is configured for 24 kHz mono PCM16 to match OpenAI Realtime transcription input
 - The ad-hoc summary endpoint uses the same schema extraction service as the live session path
 - The summary-to-chat endpoint uses the shared schema registry prompt so the LLM can reason over the extracted field names before recommending what should be inserted into the database, and it returns the normalized payload for insertion
-- The chat endpoint uses the same shared LLM service as the live system, but it bypasses Deepgram, turn finalization, and schema extraction
+- The chat endpoint uses the same shared LLM service as the live system, but it bypasses live transcription, turn finalization, and schema extraction

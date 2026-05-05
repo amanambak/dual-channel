@@ -2,9 +2,15 @@
 
 import { normalizeLeadIdInput } from './utils.js';
 
+const CONFIG_REF = globalThis.CONFIG || {
+  UTTERANCE_MERGE_WINDOW_MS: 1800,
+};
+
 let currentCard = null;
 let pendingMergeCard = null;
 let pendingMergeAt = 0;
+let pendingTranscriptFrame = null;
+let transcriptFrameScheduled = false;
 const aiCards = new Map();
 const committedUtteranceIds = new Set();
 const container = document.getElementById('transcript-container');
@@ -26,6 +32,9 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatSendBtn = document.getElementById('chat-send-btn');
 const clearChatBtn = document.getElementById('clear-chat-btn');
+const controlsToggleBtn = document.getElementById('controls-toggle-btn');
+const controlsToggleLabel = document.getElementById('controls-toggle-label');
+const controlBubbleBtn = document.getElementById('control-bubble-btn');
 const leadIdForm = document.getElementById('lead-id-form');
 const leadIdInput = document.getElementById('lead-id-input');
 const leadIdFetchBtn = document.getElementById('lead-id-fetch-btn');
@@ -45,6 +54,7 @@ let latestLeadContext = null;
 let leadDetailRequestId = 0;
 let leadFetchInFlight = false;
 let leadDetailsCollapsed = false;
+let controlsCollapsed = false;
 
 async function loadStoredMessages() {
   return new Promise((resolve) => {
@@ -105,15 +115,18 @@ async function initializePanel() {
       'currentLeadDocumentStatus',
       'currentLeadDreDocumentError',
       'leadDetailsCollapsed',
+      'controlsCollapsed',
     ]),
   ]);
   // Restore chat state
   chatMessages = Array.isArray(stored.chatMessages) ? stored.chatMessages : [];
   activePanelTab = stored.activePanelTab === 'chat' ? 'chat' : 'call';
   leadDetailsCollapsed = Boolean(stored.leadDetailsCollapsed);
+  controlsCollapsed = Boolean(stored.controlsCollapsed);
 
   renderStoredMessages(messages);
   renderStoredChatMessages();
+  setControlsCollapsed(controlsCollapsed, { persist: false });
   setActivePanelTab(activePanelTab, { persist: false });
   await loadStoredLeadDetail();
 
@@ -144,6 +157,18 @@ if (leadIdForm) {
 if (leadDetailToggleBtn) {
   leadDetailToggleBtn.addEventListener('click', () => {
     setLeadDetailsCollapsed(!leadDetailsCollapsed);
+  });
+}
+
+if (controlsToggleBtn) {
+  controlsToggleBtn.addEventListener('click', () => {
+    setControlsCollapsed(!controlsCollapsed);
+  });
+}
+
+if (controlBubbleBtn) {
+  controlBubbleBtn.addEventListener('click', () => {
+    setControlsCollapsed(false);
   });
 }
 
@@ -216,12 +241,6 @@ chatInput.addEventListener('keydown', async (event) => {
 });
 
 summaryBtn.addEventListener('click', async () => {
-  const messages = await loadStoredMessages();
-  if (messages.length === 0) {
-    alert('No conversation data available. Start a conversation first.');
-    return;
-  }
-
   const btnText = document.getElementById('summary-btn-text');
   const originalText = btnText.textContent;
   btnText.innerHTML = '<span class="loading-spinner"></span> Generating...';
@@ -274,6 +293,29 @@ function updateAgentMicPauseUI(isPaused, isActive = true) {
 function updateCaptureModeUI(mode) {
   const isRtcMode = mode === 'rtc';
   captureModeBtn.textContent = isRtcMode ? 'Mode: RTC' : 'Mode: Google Meet';
+}
+
+function setControlsCollapsed(collapsed, options = {}) {
+  controlsCollapsed = Boolean(collapsed);
+  if (callView) {
+    callView.classList.toggle('controls-collapsed', controlsCollapsed);
+  }
+  if (controlsToggleBtn) {
+    controlsToggleBtn.setAttribute('aria-expanded', String(!controlsCollapsed));
+    controlsToggleBtn.title = controlsCollapsed ? 'Show Controls' : 'Hide Controls';
+  }
+  if (controlsToggleLabel) {
+    controlsToggleLabel.textContent = controlsCollapsed ? 'Show' : 'Hide';
+  }
+  if (controlBubbleBtn) {
+    controlBubbleBtn.setAttribute('aria-expanded', String(!controlsCollapsed));
+  }
+  if (options.persist !== false) {
+    chrome.storage.local.set({ controlsCollapsed }).catch(() => {});
+  }
+  if (activePanelTab === 'call') {
+    requestAnimationFrame(scrollToBottom);
+  }
 }
 
 async function loadStoredLeadDetail() {
@@ -863,45 +905,16 @@ async function sendChatMessage(textOverride = null, options = {}) {
 
 const SIDEPANEL_MESSAGE_HANDLERS = {
   TRANSCRIPT_UPDATE(message) {
-    const { transcript, isFinal, metadata, speaker } = message;
-    const speakerLabel = resolveSpeakerLabel(speaker, metadata);
-    const now = Date.now();
-    const canMergePending =
-      pendingMergeCard
-      && pendingMergeCard.speakerLabel === speakerLabel
-      && now - pendingMergeAt <= CONFIG.UTTERANCE_MERGE_WINDOW_MS;
-
-    if (!currentCard && transcript.trim()) {
-      if (canMergePending) {
-        currentCard = pendingMergeCard;
-        pendingMergeCard = null;
-        reviveCard(currentCard);
-      } else {
-        currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
-        container.appendChild(currentCard.element);
+    if (!message.isFinal) {
+      pendingTranscriptFrame = message;
+      if (!transcriptFrameScheduled) {
+        transcriptFrameScheduled = true;
+        requestAnimationFrame(flushPendingTranscriptFrame);
       }
-    } else if (currentCard && transcript.trim() && speakerLabel !== currentCard.speakerLabel) {
-      finalizeCard(currentCard);
-      pendingMergeCard = currentCard;
-      pendingMergeAt = Date.now();
-      currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
-      container.appendChild(currentCard.element);
+      return;
     }
-
-    if (currentCard) {
-      if (isFinal) {
-        appendFinalToCard(currentCard, transcript);
-        if (metadata && metadata.speech_final) {
-          finalizeCard(currentCard);
-          pendingMergeCard = currentCard;
-          pendingMergeAt = Date.now();
-          currentCard = null;
-        }
-      } else {
-        updateInterimInCard(currentCard, transcript);
-      }
-      scrollToBottom();
-    }
+    flushPendingTranscriptFrame();
+    applyTranscriptUpdate(message);
   },
 
   AI_RESPONSE_CHUNK(message) {
@@ -931,6 +944,7 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
   CAPTURE_MODE_CHANGED(message)   { updateCaptureModeUI(message.captureMode); },
 
   UTTERANCE_END() {
+    flushPendingTranscriptFrame();
     if (currentCard) {
       finalizeCard(currentCard);
       pendingMergeCard = currentCard;
@@ -940,11 +954,65 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
   },
 
   UTTERANCE_COMMITTED(message) {
+    flushPendingTranscriptFrame();
     renderCommittedUtterance(message);
   },
 
   API_ERROR(message) { addErrorToContainer(message.message, message.source); },
 };
+
+function flushPendingTranscriptFrame() {
+  if (!pendingTranscriptFrame) {
+    transcriptFrameScheduled = false;
+    return;
+  }
+  const message = pendingTranscriptFrame;
+  pendingTranscriptFrame = null;
+  transcriptFrameScheduled = false;
+  applyTranscriptUpdate(message);
+}
+
+function applyTranscriptUpdate(message) {
+  const { transcript, isFinal, metadata, speaker } = message;
+  const speakerLabel = resolveSpeakerLabel(speaker, metadata);
+  const now = Date.now();
+  const canMergePending =
+    pendingMergeCard
+    && pendingMergeCard.speakerLabel === speakerLabel
+    && now - pendingMergeAt <= CONFIG_REF.UTTERANCE_MERGE_WINDOW_MS;
+
+  if (!currentCard && transcript.trim()) {
+    if (canMergePending) {
+      currentCard = pendingMergeCard;
+      pendingMergeCard = null;
+      reviveCard(currentCard);
+    } else {
+      currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
+      container.appendChild(currentCard.element);
+    }
+  } else if (currentCard && transcript.trim() && speakerLabel !== currentCard.speakerLabel) {
+    finalizeCard(currentCard);
+    pendingMergeCard = currentCard;
+    pendingMergeAt = Date.now();
+    currentCard = createUtteranceCard(`u-${Date.now()}`, speakerLabel);
+    container.appendChild(currentCard.element);
+  }
+
+  if (currentCard) {
+    if (isFinal) {
+      appendFinalToCard(currentCard, transcript);
+      if (metadata && metadata.speech_final) {
+        finalizeCard(currentCard);
+        pendingMergeCard = currentCard;
+        pendingMergeAt = Date.now();
+        currentCard = null;
+      }
+    } else {
+      updateInterimInCard(currentCard, transcript);
+    }
+    scrollToBottom();
+  }
+}
 
 chrome.runtime.onMessage.addListener((message) => {
   const handler = SIDEPANEL_MESSAGE_HANDLERS[message.type];

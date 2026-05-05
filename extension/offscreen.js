@@ -11,8 +11,6 @@ let workletCustomer = null;
 let workletAgent = null;
 let backendSocket;
 let currentSessionId = null;
-let sendIntervalCustomer = null;
-let sendIntervalAgent = null;
 let isAgentMicPaused = false;
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -47,7 +45,7 @@ async function startCapture(streamId, captureMode = 'gmeet') {
     });
 
     audioContext = new AudioContext({
-      sampleRate: 16000
+      sampleRate: 24000
     });
 
     // Create gain nodes for each channel
@@ -103,40 +101,21 @@ async function startCapture(streamId, captureMode = 'gmeet') {
 }
 
 /**
- * Creates a periodic interval that drains an audio buffer and sends it over
- * the backend WebSocket with a single-byte channel prefix.
+ * Sends one prepared audio chunk over the backend WebSocket with a single-byte
+ * channel prefix.
  *
  * @param {number} channelByte - 0 = customer, 1 = agent
- * @param {Array}  buffer      - Shared buffer array (mutated in-place)
- * @param {number} intervalMs  - Polling interval in milliseconds
- * @returns {number} The interval ID (pass to clearInterval to stop it)
+ * @param {ArrayBuffer} audioBuffer - 25 ms mono Int16 PCM payload
  */
-function createChannelSender(channelByte, buffer, intervalMs = 100, shouldSkip = () => false) {
-  return setInterval(() => {
-    if (shouldSkip()) {
-      buffer.length = 0;
-      return;
-    }
-    if (buffer.length === 0 || !backendSocket || backendSocket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    const totalLength = buffer.reduce((sum, buf) => sum + buf.byteLength, 0);
-    if (totalLength === 0) {
-      return;
-    }
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const buf of buffer) {
-      combined.set(new Uint8Array(buf), offset);
-      offset += buf.byteLength;
-    }
-    const channelBuffer = new ArrayBuffer(totalLength + 1);
-    const view = new Uint8Array(channelBuffer);
-    view[0] = channelByte;
-    view.set(combined, 1);
-    backendSocket.send(channelBuffer);
-    buffer.length = 0; // drain in-place
-  }, intervalMs);
+function sendChannelFrame(channelByte, audioBuffer, shouldSkip = () => false) {
+  if (shouldSkip() || !backendSocket || backendSocket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  const channelBuffer = new ArrayBuffer(audioBuffer.byteLength + 1);
+  const view = new Uint8Array(channelBuffer);
+  view[0] = channelByte;
+  view.set(new Uint8Array(audioBuffer), 1);
+  backendSocket.send(channelBuffer);
 }
 
 async function setupDualChannelWorklets(tabGain, micGain) {
@@ -148,17 +127,17 @@ async function setupDualChannelWorklets(tabGain, micGain) {
 
   workletCustomer = new AudioWorkletNode(audioContext, 'capture-worklet');
   tabGain.connect(workletCustomer);
-  const bufferCustomer = [];
-  workletCustomer.port.onmessage = (event) => { bufferCustomer.push(event.data); };
-  sendIntervalCustomer = createChannelSender(0, bufferCustomer);
+  workletCustomer.port.onmessage = (event) => {
+    sendChannelFrame(0, event.data);
+  };
 
   // Worklet for microphone (channel 1 - agent)
   if (micGain) {
     workletAgent = new AudioWorkletNode(audioContext, 'capture-worklet');
     micGain.connect(workletAgent);
-    const bufferAgent = [];
-    workletAgent.port.onmessage = (event) => { bufferAgent.push(event.data); };
-    sendIntervalAgent = createChannelSender(1, bufferAgent, 100, () => isAgentMicPaused);
+    workletAgent.port.onmessage = (event) => {
+      sendChannelFrame(1, event.data, () => isAgentMicPaused);
+    };
   }
 }
 
@@ -173,15 +152,6 @@ function setAgentMicPaused(paused) {
 
 async function stopCapture() {
   isAgentMicPaused = false;
-  if (sendIntervalCustomer) {
-    clearInterval(sendIntervalCustomer);
-    sendIntervalCustomer = null;
-  }
-  if (sendIntervalAgent) {
-    clearInterval(sendIntervalAgent);
-    sendIntervalAgent = null;
-  }
-
   if (backendSocket) {
     try {
       if (backendSocket.readyState === WebSocket.OPEN) {
@@ -263,16 +233,11 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
     let opened = false;
 
     socket.onopen = () => {
-      const params = { ...(CONFIG.DEEPGRAM_PARAMS || {}) };
-      params.diarize = params.diarize || 'true';
-      params.diarize_version = params.diarize_version || '2023-03-31';
-      // The extension sends each speaker as a separate mono Deepgram stream.
-      // Do not enable Deepgram multichannel for these per-channel connections.
-      params.multichannel = 'false';
+      const params = { ...(CONFIG.OPENAI_TRANSCRIPTION_PARAMS || {}) };
       socket.send(JSON.stringify({
         type: 'start_session',
         config: {
-          deepgramParams: params,
+          openaiTranscriptionParams: params,
           modelOverride: CONFIG.LLM_MODEL || null,
           captureMode,
           channels: hasMicChannel ? ['customer', 'agent'] : ['customer']

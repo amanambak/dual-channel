@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Chrome extension is the capture and presentation layer for the call-assist system. It no longer talks to Deepgram or Gemini directly. Its job is to capture tab and microphone audio, stream PCM to the backend, and render the transcript, call responses, and chat responses that come back from the backend.
+The Chrome extension is the capture and presentation layer for the call-assist system. It does not talk to OpenAI, Gemini, or other model providers directly. Its job is to capture tab and microphone audio, stream PCM to the backend, and render the transcript, call responses, and chat responses that come back from the backend.
 
 ## Current Runtime Split
 
@@ -19,7 +19,7 @@ The Chrome extension is the capture and presentation layer for the call-assist s
 
 ### Backend Responsibilities
 
-- Deepgram streaming transcription
+- OpenAI Realtime transcription
 - utterance segmentation and filtering
 - schema-driven customer-info extraction
 - streaming AI suggestions
@@ -48,17 +48,17 @@ Responsibilities:
 Responsibilities:
 
 - obtains the real audio stream via `getUserMedia`
-- creates an `AudioContext` at 16 kHz
+- creates an `AudioContext` at 24 kHz
 - registers the audio worklet
 - opens the backend WebSocket session at `CONFIG.BACKEND_WS_URL`
 - sends a `start_session` payload containing:
-  - `deepgramParams`
+  - `openaiTranscriptionParams`
   - `modelOverride`
   - `captureMode`
   - channel layout
 - forwards backend transcript and AI events back into extension runtime messages
 
-The current `deepgramParams` source includes `model=nova-3`, `language=multi`, `punctuate=true`, `utterance_end_ms`, `endpointing`, `encoding`, and `sample_rate`. The offscreen layer also sets `diarize=true` and `multichannel` based on capture mode.
+The current `openaiTranscriptionParams` source includes `model=gpt-4o-transcribe`, optional `language`, a transcription `prompt`, VAD tuning, and noise-reduction mode.
 
 ### 3. Audio Worklet
 
@@ -164,10 +164,10 @@ Important keys:
 
 - `BACKEND_WS_URL`
 - `BACKEND_HTTP_URL`
-- `DEEPGRAM_PARAMS`
+- `OPENAI_TRANSCRIPTION_PARAMS`
 - `LLM_MODEL`
 
-The extension does not store Deepgram or LLM API keys. The config file only controls capture parameters, optional model override defaults, and backend endpoints.
+The extension does not store OpenAI or LLM API keys. The config file only controls capture parameters, optional model override defaults, and backend endpoints.
 
 ## Storage
 
@@ -188,7 +188,7 @@ This lets the side panel restore the previous conversation state, keep the call 
 - Sends mixed audio to the backend for speaker-aware transcription
 - Displays agent questions as AI suggestions
 - Renders customer replies as transcript cards and persistent stored messages
-- Supports a chat-only mode for normal LLM Q&A without Deepgram session state
+- Supports a chat-only mode for normal LLM Q&A without live transcription session state
 
 ## Current Constraints
 

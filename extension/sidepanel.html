@@ -1,4 +1,4 @@
-`<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -104,6 +104,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 10px;
     }
     .title-group {
       display: flex;
@@ -126,6 +127,86 @@
       font-size: 1.02rem;
       font-weight: 700;
       letter-spacing: 0.01em;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .controls-toggle-btn {
+      border: 1px solid rgba(125, 211, 252, 0.22);
+      border-radius: 10px;
+      background: rgba(24, 35, 58, 0.74);
+      color: #dbeafe;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 6px 9px;
+      font-size: 0.76rem;
+      font-weight: 800;
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+    .controls-toggle-btn:hover,
+    .controls-toggle-btn:focus-visible {
+      transform: translateY(-1px);
+      background: rgba(30, 41, 59, 0.96);
+      border-color: rgba(125, 211, 252, 0.42);
+      color: var(--text);
+      outline: none;
+    }
+    .controls-toggle-btn svg {
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+    }
+    .control-section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #call-view.controls-collapsed .control-section {
+      display: none;
+    }
+    #call-view.controls-collapsed .header {
+      padding: 12px 16px;
+    }
+    .control-bubble {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 42px;
+      padding: 0 14px;
+      border: 1px solid rgba(125, 211, 252, 0.34);
+      border-radius: 999px;
+      background: linear-gradient(135deg, #0369a1, #0ea5e9);
+      color: #fff;
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: 0 18px 34px rgba(3, 105, 161, 0.34);
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+    }
+    .control-bubble:hover,
+    .control-bubble:focus-visible {
+      transform: translateY(-2px);
+      box-shadow: 0 22px 38px rgba(3, 105, 161, 0.42);
+      outline: none;
+    }
+    .control-bubble svg {
+      width: 17px;
+      height: 17px;
+      flex-shrink: 0;
+    }
+    #call-view.controls-collapsed.active .control-bubble {
+      display: flex;
     }
     .lead-id-lookup {
       display: flex;
@@ -1052,35 +1133,47 @@
           <div id="dot" class="status-dot"></div>
           <span class="panel-title">Home Loan AI Assistant</span>
         </div>
-        <button id="clear-btn" class="clear-btn" title="Clear Call Messages">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        <div class="header-actions">
+          <button id="controls-toggle-btn" class="controls-toggle-btn" type="button" title="Hide Controls" aria-expanded="true" aria-controls="control-section">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
+            <span id="controls-toggle-label">Hide</span>
+          </button>
+          <button id="clear-btn" class="clear-btn" title="Clear Call Messages">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          </button>
+        </div>
+      </div>
+      <div id="control-section" class="control-section">
+        <div id="lead-id-lookup" class="lead-id-lookup" title="Lead detail lookup">
+          <div class="lead-id-label">Lead Detail Lookup</div>
+          <form id="lead-id-form" class="lead-id-form">
+            <input id="lead-id-input" class="lead-id-input" type="text" inputmode="numeric" autocomplete="off" placeholder="Enter lead id" />
+            <button id="lead-id-fetch-btn" class="lead-id-fetch-btn" type="submit">Fetch</button>
+          </form>
+        </div>
+        <div id="lead-detail-status" class="lead-detail-status">Enter a lead id and fetch details.</div>
+        <button id="lead-detail-toggle-btn" class="lead-detail-toggle" type="button" aria-expanded="true">Hide details</button>
+        <div id="lead-detail-data" class="lead-detail-data"></div>
+        <div class="capture-controls">
+          <button id="toggle-btn" class="control-btn">Start Capture</button>
+          <button id="pause-agent-btn" class="pause-btn" disabled>Pause Mic</button>
+        </div>
+        <div class="secondary-actions">
+          <button id="capture-mode-btn" class="mode-btn">Mode: Google Meet</button>
+          <button id="mic-permission-btn" class="summary-btn">
+            🎤 Mic Permission
+          </button>
+        </div>
+        <button id="summary-btn" class="summary-btn">
+          <span id="summary-btn-text">📊 Generate Summary & Insights</span>
         </button>
       </div>
-      <div id="lead-id-lookup" class="lead-id-lookup" title="Lead detail lookup">
-        <div class="lead-id-label">Lead Detail Lookup</div>
-        <form id="lead-id-form" class="lead-id-form">
-          <input id="lead-id-input" class="lead-id-input" type="text" inputmode="numeric" autocomplete="off" placeholder="Enter lead id" />
-          <button id="lead-id-fetch-btn" class="lead-id-fetch-btn" type="submit">Fetch</button>
-        </form>
-      </div>
-      <div id="lead-detail-status" class="lead-detail-status">Enter a lead id and fetch details.</div>
-      <button id="lead-detail-toggle-btn" class="lead-detail-toggle" type="button" aria-expanded="true">Hide details</button>
-      <div id="lead-detail-data" class="lead-detail-data"></div>
-      <div class="capture-controls">
-        <button id="toggle-btn" class="control-btn">Start Capture</button>
-        <button id="pause-agent-btn" class="pause-btn" disabled>Pause Mic</button>
-      </div>
-      <div class="secondary-actions">
-        <button id="capture-mode-btn" class="mode-btn">Mode: Google Meet</button>
-        <button id="mic-permission-btn" class="summary-btn">
-          🎤 Mic Permission
-        </button>
-      </div>
-      <button id="summary-btn" class="summary-btn">
-        <span id="summary-btn-text">📊 Generate Summary & Insights</span>
-      </button>
     </div>
     <div id="transcript-container"></div>
+    <button id="control-bubble-btn" class="control-bubble" type="button" aria-controls="control-section">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-6"></path><path d="M6 20V10"></path><path d="M18 20V4"></path><path d="M4 10h4"></path><path d="M10 14h4"></path><path d="M16 4h4"></path></svg>
+      Controls
+    </button>
   </div>
 
   <div id="chat-view" class="view">
@@ -1115,6 +1208,7 @@
     </div>
   </div>
 
+  <script src="config.js"></script>
   <script src="lead-detail-api.js"></script>
   <script type="module" src="sidepanel.js"></script>
 </body>

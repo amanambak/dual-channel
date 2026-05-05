@@ -6,8 +6,8 @@ from fastapi import WebSocketDisconnect
 
 from app.models.events import ErrorEvent
 from app.models.events import TranscriptEvent
-from app.services.deepgram_client import DeepgramClient
 from app.services.lead_detail_context import build_priority_missing_fields
+from app.services.openai_realtime_client import OpenAIRealtimeTranscriptionClient
 from app.services.session_text import (
     normalize_confidence,
     should_capture_final_segment,
@@ -35,16 +35,18 @@ async def run(session) -> None:
                 channel = "customer"
                 audio_data = data
 
-            deepgram = session.deepgrams.get(channel)
-            if deepgram and not await deepgram.send_audio(bytes(audio_data)):
-                logger.warning("Deepgram channel %s closed while sending audio", channel)
-                session.deepgrams.pop(channel, None)
-                task = session.deepgram_tasks.pop(channel, None)
-                if task:
-                    task.cancel()
-                keepalive_task = session.deepgram_keepalive_tasks.pop(channel, None)
-                if keepalive_task:
-                    keepalive_task.cancel()
+            send_queue = session.transcription_send_queues.get(channel)
+            if send_queue is not None:
+                audio_frame = bytes(audio_data)
+                try:
+                    send_queue.put_nowait(audio_frame)
+                except asyncio.QueueFull:
+                    try:
+                        send_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    send_queue.put_nowait(audio_frame)
+                    logger.warning("Dropped stale OpenAI audio frame for congested channel %s", channel)
 
 
 def update_lead_context(session, data: dict) -> None:
@@ -80,10 +82,7 @@ async def handle_text_message(session, raw_message: str) -> None:
 
     if message_type == "start_session":
         config = data.get("config", {})
-        params = dict(config.get("deepgramParams") or {})
-        params.setdefault("interim_results", "true")
-        params.setdefault("multichannel", "true")
-        params.setdefault("punctuate", "true")
+        params = dict(config.get("openaiTranscriptionParams") or {})
         session.model_override = (
             config.get("modelOverride") or config.get("aiModel") or config.get("geminiModel")
         )
@@ -99,12 +98,14 @@ async def handle_text_message(session, raw_message: str) -> None:
 
         channels = config.get("channels", ["customer", "agent"])
         for ch in channels:
-            dg = DeepgramClient(params)
-            await dg.connect()
-            session.deepgrams[ch] = dg
-            session.deepgram_tasks[ch] = asyncio.create_task(read_deepgram(session, ch))
-            session.deepgram_keepalive_tasks[ch] = asyncio.create_task(
-                keepalive_deepgram(session, ch)
+            client = OpenAIRealtimeTranscriptionClient(params, channel=ch)
+            await client.connect()
+            session.transcription_clients[ch] = client
+            session.transcription_send_queues[ch] = asyncio.Queue(maxsize=20)
+            session.transcription_send_tasks[ch] = asyncio.create_task(send_transcription(session, ch))
+            session.transcription_tasks[ch] = asyncio.create_task(read_transcription(session, ch))
+            session.transcription_keepalive_tasks[ch] = asyncio.create_task(
+                keepalive_transcription(session, ch)
             )
 
         await session.send_json({"type": "session_started", "sessionId": session.session_id})
@@ -118,52 +119,113 @@ async def handle_text_message(session, raw_message: str) -> None:
         await close(session)
 
 
-async def read_deepgram(session, channel: str) -> None:
-    deepgram = session.deepgrams.get(channel)
-    if not deepgram:
+async def read_transcription(session, channel: str) -> None:
+    transcriber = session.transcription_clients.get(channel)
+    if not transcriber:
         return
     try:
         while True:
-            raw_message = await deepgram.recv()
+            raw_message = await transcriber.recv()
             data = json.loads(raw_message)
             data["channel_id"] = channel
-            await handle_deepgram_message(session, data)
+            await handle_transcription_message(session, data)
     except Exception as exc:
         if not session.closed:
-            logger.exception("deepgram read failed for channel %s", channel)
-            await session.send_model(ErrorEvent(source="Deepgram", message=str(exc)))
+            logger.exception("OpenAI transcription read failed for channel %s", channel)
+            await session.send_model(ErrorEvent(source="OpenAI Realtime", message=str(exc)))
 
 
-async def keepalive_deepgram(session, channel: str) -> None:
-    deepgram = session.deepgrams.get(channel)
-    if not deepgram:
+async def send_transcription(session, channel: str) -> None:
+    transcriber = session.transcription_clients.get(channel)
+    send_queue = session.transcription_send_queues.get(channel)
+    if not transcriber or send_queue is None:
         return
     try:
-        while not session.closed and channel in session.deepgrams:
-            await asyncio.sleep(5)
-            if not await deepgram.send_keepalive():
-                logger.info("Stopping Deepgram keepalive for closed channel %s", channel)
+        while not session.closed and channel in session.transcription_clients:
+            audio_data = await send_queue.get()
+            if not await transcriber.send_audio(audio_data):
+                logger.warning("OpenAI transcription channel %s closed while sending audio", channel)
+                session.transcription_clients.pop(channel, None)
+                task = session.transcription_tasks.pop(channel, None)
+                if task:
+                    task.cancel()
+                keepalive_task = session.transcription_keepalive_tasks.pop(channel, None)
+                if keepalive_task:
+                    keepalive_task.cancel()
                 break
     except asyncio.CancelledError:
         return
     except Exception as exc:
         if not session.closed:
-            logger.warning("Deepgram keepalive failed for channel %s: %s", channel, exc)
+            logger.exception("OpenAI transcription send failed for channel %s", channel)
+            await session.send_model(ErrorEvent(source="OpenAI Realtime", message=str(exc)))
 
 
-async def handle_deepgram_message(session, data: dict) -> None:
-    alternative = extract_primary_alternative(data)
-    transcript = alternative.get("transcript", "")
-    is_final = data.get("is_final", False)
+async def keepalive_transcription(session, channel: str) -> None:
+    transcriber = session.transcription_clients.get(channel)
+    if not transcriber:
+        return
+    try:
+        while not session.closed and channel in session.transcription_clients:
+            await asyncio.sleep(5)
+            if not await transcriber.send_keepalive():
+                logger.info("Stopping OpenAI transcription keepalive for closed channel %s", channel)
+                break
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        if not session.closed:
+            logger.warning("OpenAI transcription keepalive failed for channel %s: %s", channel, exc)
+
+
+async def handle_transcription_message(session, data: dict) -> None:
+    event_type = data.get("type")
+    channel_id = data.get("channel_id", "customer")
+    if event_type in {
+        "session.created",
+        "session.updated",
+        "input_audio_buffer.speech_started",
+        "input_audio_buffer.speech_stopped",
+        "conversation.item.input_audio_transcription.delta",
+        "conversation.item.input_audio_transcription.completed",
+    }:
+        logger.info(
+            "OpenAI transcription event: channel=%s type=%s item_id=%s snippet=%s",
+            channel_id,
+            event_type,
+            data.get("item_id"),
+            str(
+                data.get("transcript")
+                or data.get("text")
+                or data.get("delta")
+                or ""
+            )[:80],
+        )
+    if event_type == "error":
+        error = data.get("error") if isinstance(data.get("error"), dict) else {}
+        message = error.get("message") or data.get("message") or "Realtime transcription error"
+        await session.send_model(ErrorEvent(source="OpenAI Realtime", message=str(message)))
+        return
+    if event_type == "conversation.item.input_audio_transcription.segment":
+        return
+
+    transcript, is_final, item_id = extract_openai_transcript(session, data)
+    if not transcript and event_type not in {
+        "input_audio_buffer.speech_started",
+        "input_audio_buffer.speech_stopped",
+    }:
+        return
+
     channel_id = data.get("channel_id", "customer")
 
     speaker_map = {"customer": "0", "agent": "1", "0": "0", "1": "1"}
     speaker = speaker_map.get(channel_id, "0")
 
     metadata = {
-        "confidence": alternative.get("confidence"),
-        "speech_final": data.get("speech_final", False),
+        "confidence": extract_logprob_confidence(data) if is_final else None,
+        "speech_final": event_type == "input_audio_buffer.speech_stopped",
         "channel": channel_id,
+        "item_id": item_id,
     }
 
     if transcript:
@@ -193,48 +255,61 @@ async def handle_deepgram_message(session, data: dict) -> None:
                 )
                 session.finalized_segments = True
                 session._schedule_finalize()
+            else:
+                logger.info(
+                    "Dropping final transcript: channel=%s speaker=%s text=%r confidence=%s",
+                    channel_id,
+                    speaker,
+                    transcript.strip(),
+                    confidence,
+                )
 
         if metadata["speech_final"] and session.state.current_segments:
             session._schedule_finalize()
 
-    if data.get("type") == "UtteranceEnd":
-        await session.send_json({"type": "utterance_end"})
+    if event_type == "conversation.item.input_audio_transcription.completed":
         if session.state.current_segments:
             session._schedule_finalize()
 
 
-def extract_primary_alternative(data: dict) -> dict:
-    alternatives = data.get("alternatives", [])
-    if isinstance(alternatives, list) and alternatives:
-        primary = alternatives[0]
-        if isinstance(primary, dict):
-            return primary
+def extract_openai_transcript(session, data: dict) -> tuple[str, bool, str | None]:
+    event_type = data.get("type")
+    channel_id = str(data.get("channel_id", "customer"))
+    item_id = data.get("item_id")
+    item_key = str(item_id or data.get("event_id") or "")
 
-    channel = data.get("channel", {})
-    if isinstance(channel, list):
-        channel = channel[0] if channel else {}
-    if not isinstance(channel, dict):
-        if isinstance(channel, int):
-            logger.debug("Deepgram channel index payload: %s", channel)
-        else:
-            logger.warning("Unexpected Deepgram channel payload type: %s", type(channel).__name__)
-        return {}
+    if event_type == "conversation.item.input_audio_transcription.delta":
+        delta = str(data.get("delta") or "")
+        if not delta:
+            return "", False, item_id
+        key = (channel_id, item_key)
+        transcript = f"{session.transcript_delta_buffers.get(key, '')}{delta}"
+        session.transcript_delta_buffers[key] = transcript
+        return transcript, False, item_id
 
-    alternatives = channel.get("alternatives", [])
-    if not isinstance(alternatives, list):
-        logger.warning(
-            "Unexpected Deepgram alternatives payload type: %s",
-            type(alternatives).__name__,
-        )
-        return {}
+    if event_type == "conversation.item.input_audio_transcription.completed":
+        transcript = str(data.get("transcript") or "")
+        if item_key:
+            session.transcript_delta_buffers.pop((channel_id, item_key), None)
+        return transcript, True, item_id
 
-    primary = alternatives[0] if alternatives else {}
-    if not isinstance(primary, dict):
-        logger.warning(
-            "Unexpected Deepgram alternative item type: %s", type(primary).__name__
-        )
-        return {}
-    return primary
+    return "", False, item_id
+
+
+def extract_logprob_confidence(data: dict) -> float | None:
+    logprobs = data.get("logprobs")
+    if not isinstance(logprobs, list) or not logprobs:
+        return None
+    probabilities = []
+    for item in logprobs:
+        if not isinstance(item, dict):
+            continue
+        logprob = item.get("logprob")
+        if isinstance(logprob, (int, float)):
+            probabilities.append(2.718281828459045 ** float(logprob))
+    if not probabilities:
+        return None
+    return sum(probabilities) / len(probabilities)
 
 
 async def close(session) -> None:
@@ -242,20 +317,27 @@ async def close(session) -> None:
     session.connection_closed = True
     session._cancel_finalize_task()
 
-    for channel, deepgram in session.deepgrams.items():
+    for task in session.transcription_send_tasks.values():
+        if task:
+            task.cancel()
+    session.transcription_send_tasks.clear()
+    session.transcription_send_queues.clear()
+
+    for channel, transcriber in list(session.transcription_clients.items()):
         try:
-            await deepgram.send_close()
+            await transcriber.send_close()
         except Exception:
             pass
-        await deepgram.close()
-    session.deepgrams.clear()
+        await transcriber.close()
+    session.transcription_clients.clear()
 
-    for task in session.deepgram_tasks.values():
+    for task in session.transcription_tasks.values():
         if task:
             task.cancel()
-    session.deepgram_tasks.clear()
+    session.transcription_tasks.clear()
 
-    for task in session.deepgram_keepalive_tasks.values():
+    for task in session.transcription_keepalive_tasks.values():
         if task:
             task.cancel()
-    session.deepgram_keepalive_tasks.clear()
+    session.transcription_keepalive_tasks.clear()
+    session.transcript_delta_buffers.clear()

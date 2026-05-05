@@ -10,13 +10,15 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    deepgram_api_key: str = ""
-    deepgram_ws_url: str = "wss://api.deepgram.com/v1/listen"
     llm_api_key: str = Field(
         default="",
         validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     )
     openai_api_key: str = ""
+    openai_realtime_ws_url: str = "wss://api.openai.com/v1/realtime?intent=transcription"
+    openai_transcription_model: str = "gpt-4o-transcribe"
+    openai_transcription_language: str = ""
+    openai_transcription_prompt: str = ""
     llm_model: str = "gpt-5.4"
     llm_summary_model: str = "gpt-5.4"
     llm_extract_model: str = "gpt-5.4"

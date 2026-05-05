@@ -1,21 +1,28 @@
 # text_utils.py — Shared text normalization utilities
 import re
+import unicodedata
 
 NORMALIZE_REGEX_1 = re.compile(r"\s+")
-NORMALIZE_REGEX_2 = re.compile(r"[^a-z0-9 ]+")
-# Collapsing version: removes ALL non-alphanumeric (used for field/path matching)
-_COLLAPSE_REGEX = re.compile(r"[^a-z0-9]+")
 
 
 def normalize_text(text: str) -> str:
-    """Normalize text preserving spaces: lowercase, remove non-alphanumeric, collapse whitespace."""
+    """Normalize text preserving spaces across Roman and non-Roman scripts."""
     normalized = NORMALIZE_REGEX_1.sub(" ", text.lower()).strip()
-    normalized = NORMALIZE_REGEX_2.sub("", normalized)
+    normalized = "".join(
+        char
+        for char in normalized
+        if char.isalnum() or char.isspace() or unicodedata.category(char).startswith("M")
+    )
+    normalized = NORMALIZE_REGEX_1.sub(" ", normalized)
     return normalized.strip()
 
 
 def collapse_text(text: str) -> str:
-    """Collapse text for matching: lowercase, remove all non-alphanumeric, collapse whitespace."""
-    normalized = _COLLAPSE_REGEX.sub("", text.lower())
+    """Collapse text for matching while preserving unicode word characters."""
+    normalized = "".join(
+        char
+        for char in text.lower()
+        if char.isalnum() or unicodedata.category(char).startswith("M")
+    )
     normalized = NORMALIZE_REGEX_1.sub(" ", normalized).strip()
     return normalized

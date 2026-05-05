@@ -33,18 +33,21 @@ class SessionRuntime:
         self.websocket = websocket
         self.session_id = str(uuid.uuid4())
         self.state = SessionState(session_id=self.session_id)
-        self.deepgrams = {}
+        self.transcription_clients = {}
         self.turn_graph = TurnGraphService()
         self.schema_registry = get_schema_registry()
-        self.deepgram_tasks: dict[str, asyncio.Task] = {}
-        self.deepgram_keepalive_tasks: dict[str, asyncio.Task] = {}
+        self.transcription_tasks: dict[str, asyncio.Task] = {}
+        self.transcription_keepalive_tasks: dict[str, asyncio.Task] = {}
+        self.transcription_send_tasks: dict[str, asyncio.Task] = {}
+        self.transcription_send_queues: dict[str, asyncio.Queue[bytes]] = {}
+        self.transcript_delta_buffers: dict[tuple[str, str], str] = {}
         self.ai_lock = asyncio.Lock()
         self.closed = False
         self.connection_closed = False
         self.model_override: str | None = None
         self.finalized_segments = False
         self.finalize_task: asyncio.Task | None = None
-        self.finalize_delay_seconds = 0.45
+        self.finalize_delay_seconds = 1.0
         self.pending_incomplete_utterance = ""
         self.current_segment_confidences: list[float] = []
         self.last_llm_invoked_at = 0.0
@@ -57,11 +60,11 @@ class SessionRuntime:
     async def handle_text_message(self, raw_message: str) -> None:
         await session_transport.handle_text_message(self, raw_message)
 
-    async def read_deepgram(self, channel: str) -> None:
-        await session_transport.read_deepgram(self, channel)
+    async def read_transcription(self, channel: str) -> None:
+        await session_transport.read_transcription(self, channel)
 
-    async def handle_deepgram_message(self, data: dict) -> None:
-        await session_transport.handle_deepgram_message(self, data)
+    async def handle_transcription_message(self, data: dict) -> None:
+        await session_transport.handle_transcription_message(self, data)
 
     async def finalize_utterance(self) -> None:
         await finalize_utterance_helper(self)

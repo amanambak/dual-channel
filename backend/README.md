@@ -5,7 +5,7 @@ FastAPI backend for the Chrome extension call-assist system.
 ## Responsibilities
 
 - Accept live PCM audio over `WS /ws/session`
-- Stream audio to Deepgram for transcription
+- Stream audio to OpenAI Realtime for transcription
 - Aggregate transcript chunks into utterances
 - Filter noise, filler, low-confidence speech, and incomplete trailing fragments
 - Generate live caller suggestions through a single LangChain-based LLM service
@@ -34,14 +34,14 @@ FastAPI backend for the Chrome extension call-assist system.
   WebSocket session entrypoint and summary APIs
 - [app/services/session_manager.py](/home/amanpaswan/Documents/final/backend/app/services/session_manager.py)
   Session orchestration, transcript gating, utterance finalization, and LLM triggering
-- [app/services/deepgram_client.py](/home/amanpaswan/Documents/final/backend/app/services/deepgram_client.py)
-  Upstream Deepgram streaming client
+- [app/services/openai_realtime_client.py](app/services/openai_realtime_client.py)
+  Upstream OpenAI Realtime transcription client
 - [app/llm/service.py](app/llm/service.py)
   Single LangChain-based LLM entrypoint for prompts, summaries, extraction, and streaming replies
 - [app/graph/](app/graph/)
   LangGraph turn orchestration and state graph
 - [app/services/session_transport.py](app/services/session_transport.py)
-  WebSocket and Deepgram lifecycle helpers
+  WebSocket and transcription lifecycle helpers
 - [app/services/session_text.py](app/services/session_text.py)
   Transcript normalization and call-stage heuristics
 - [app/services/schema_registry.py](/home/amanpaswan/Documents/final/backend/app/services/schema_registry.py)

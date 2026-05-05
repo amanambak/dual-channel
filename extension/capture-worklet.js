@@ -4,6 +4,9 @@
 class CaptureWorklet extends AudioWorkletProcessor {
   constructor() {
     super();
+    this.chunkSampleCount = Math.round(sampleRate * 0.025);
+    this.pendingSamples = new Float32Array(this.chunkSampleCount);
+    this.pendingSampleCount = 0;
   }
 
   process(inputs, outputs, parameters) {
@@ -12,15 +15,34 @@ class CaptureWorklet extends AudioWorkletProcessor {
       // Mono conversion (taking the first channel)
       const inputChannel = input[0];
 
-      // Convert to Int16 PCM
-      const int16Buffer = this.float32ToInt16(inputChannel);
-
-      // Send to main thread
-      this.port.postMessage(int16Buffer.buffer, [int16Buffer.buffer]);
+      this.enqueueMonoSamples(inputChannel);
     }
 
     // Returning true tells the browser to keep this processor alive
     return true;
+  }
+
+  enqueueMonoSamples(inputChannel) {
+    let offset = 0;
+    while (offset < inputChannel.length) {
+      const writable = Math.min(
+        this.chunkSampleCount - this.pendingSampleCount,
+        inputChannel.length - offset
+      );
+      this.pendingSamples.set(
+        inputChannel.subarray(offset, offset + writable),
+        this.pendingSampleCount
+      );
+      this.pendingSampleCount += writable;
+      offset += writable;
+
+      if (this.pendingSampleCount === this.chunkSampleCount) {
+        const int16Buffer = this.float32ToInt16(this.pendingSamples);
+        this.port.postMessage(int16Buffer.buffer, [int16Buffer.buffer]);
+        this.pendingSamples = new Float32Array(this.chunkSampleCount);
+        this.pendingSampleCount = 0;
+      }
+    }
   }
 
   /**
@@ -29,13 +51,16 @@ class CaptureWorklet extends AudioWorkletProcessor {
    * @returns {Int16Array}
    */
   float32ToInt16(float32Array) {
-    let i = float32Array.length;
-    const int16Array = new Int16Array(i);
-    while (i--) {
-      // Clamp the value to [-1, 1]
-      let s = Math.max(-1, Math.min(1, float32Array[i]));
-      // Convert to signed 16-bit integer
-      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    const length = float32Array.length;
+    const int16Array = new Int16Array(length);
+    for (let i = 0; i < length; i += 1) {
+      let sample = float32Array[i];
+      if (sample > 1) {
+        sample = 1;
+      } else if (sample < -1) {
+        sample = -1;
+      }
+      int16Array[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
     }
     return int16Array;
   }

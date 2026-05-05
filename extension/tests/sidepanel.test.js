@@ -20,3 +20,17 @@ test('sidepanel renders lead refresh confirmation actions', () => {
   assert.match(html, /\.chat-actions/);
   assert.match(html, /\.chat-action-btn/);
 });
+
+test('sidepanel can collapse call controls behind a bubble', () => {
+  const source = fs.readFileSync(sidepanelJsPath, 'utf8');
+  const html = fs.readFileSync(sidepanelHtmlPath, 'utf8');
+
+  assert.match(source, /setControlsCollapsed/);
+  assert.match(source, /controlsCollapsed/);
+  assert.match(source, /controlBubbleBtn\.addEventListener/);
+  assert.match(html, /id="control-section"/);
+  assert.match(html, /id="controls-toggle-btn"/);
+  assert.match(html, /id="control-bubble-btn"/);
+  assert.match(html, /\.controls-collapsed \.control-section/);
+  assert.match(html, /\.control-bubble/);
+});

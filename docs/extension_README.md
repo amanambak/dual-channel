@@ -26,19 +26,19 @@ This folder contains the plain-JS Chrome extension frontend.
 
 ## Current Config
 
-The extension forwards `DEEPGRAM_PARAMS` to the backend as part of `start_session`.
+The extension forwards `OPENAI_TRANSCRIPTION_PARAMS` to the backend as part of `start_session`.
 
 Recommended live values:
 
-- `model: 'nova-3'`
-- `language: 'multi'`
-- `punctuate: true`
-- `utterance_end_ms`
-- `endpointing`
-- `encoding: 'linear16'`
-- `sample_rate: 16000`
+- `model: 'gpt-4o-transcribe'`
+- `language: ''`
+- `prompt`
+- `vad_threshold`
+- `prefix_padding_ms`
+- `silence_duration_ms`
+- `noise_reduction: 'near_field'`
 
-Do not set Deepgram or LLM API keys in the extension. The backend owns those integrations.
+Do not set OpenAI or LLM API keys in the extension. The backend owns those integrations.
 
 ## UI Contract
 

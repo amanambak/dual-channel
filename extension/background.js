@@ -183,12 +183,12 @@ function handleGenerateSummary(message, sender, sendResponse) {
       return `${speaker}: ${msg.text}`;
     }).join('\n\n');
 
-    if (!conversation.trim()) {
+    const sessionId = await getCurrentSessionId();
+    if (!conversation.trim() && !sessionId) {
       sendResponse({ summary: { summary: 'Abhi tak conversation data available nahin hai.' } });
       return;
     }
 
-    const sessionId = await getCurrentSessionId();
     const sessionUrl = sessionId
       ? `${CONFIG.BACKEND_HTTP_URL}/api/sessions/${sessionId}/summary`
       : `${CONFIG.BACKEND_HTTP_URL}/api/summary`;

@@ -9,13 +9,13 @@ Migrate the current backend toward a graph-based LLM orchestration layer while k
 - make session logic easier to reason about
 - support branching call flows and durable state
 - reduce provider lock-in so Gemini can be replaced with minimal code changes
-- keep the WebSocket, Deepgram, and browser-extension plumbing stable
+- keep the WebSocket, OpenAI Realtime transcription, and browser-extension plumbing stable
 
 ## What Should Stay Custom
 
 Do not move these parts into LangChain/LangGraph:
 
-- `backend/app/services/deepgram_client.py`
+- `backend/app/services/openai_realtime_client.py`
 - `backend/app/api/websocket.py`
 - audio chunk routing, WebSocket lifecycle, and extension event contracts
 
@@ -107,7 +107,7 @@ Refactor `SessionRuntime` so decision logic is split into pure functions and ser
 
 ### Phase 3: Add LangGraph
 
-Move finalized utterance handling into a graph. Keep Deepgram and WebSocket code outside the graph boundary.
+Move finalized utterance handling into a graph. Keep OpenAI Realtime transcription and WebSocket code outside the graph boundary.
 
 ### Phase 4: Replace Ad-Hoc Prompting
 
@@ -142,7 +142,7 @@ To keep provider changes cheap:
 The final call path should look like this:
 
 1. audio arrives from the extension
-2. Deepgram produces transcript events
+2. OpenAI Realtime produces transcript events
 3. session runtime finalizes an utterance
 4. LangGraph receives the utterance and current state
 5. provider adapter executes the required LLM step

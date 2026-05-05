@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The backend is the real-time processing core for the Chrome extension. It accepts the browser WebSocket session, opens one Deepgram streaming connection per active audio channel, segments turns, runs schema-driven customer-info extraction, streams AI suggestions back to the extension, and exposes a separate chat-only LLM endpoint for the side panel chat tab.
+The backend is the real-time processing core for the Chrome extension. It accepts the browser WebSocket session, opens one OpenAI Realtime transcription connection per active audio channel, segments turns, runs schema-driven customer-info extraction, streams AI suggestions back to the extension, and exposes a separate chat-only LLM endpoint for the side panel chat tab.
 
 ## High-Level Flow
 
@@ -12,10 +12,10 @@ graph TD
     API --> SM[SessionManager]
     SM --> SR[SessionRuntime]
     SR --> ST[session_transport]
-    ST --> DG[DeepgramClient]
-    DG --> DGA[Deepgram WS /v1/listen]
-    DGA --> DG
-    DG --> ST
+    ST --> RT[OpenAIRealtimeTranscriptionClient]
+    RT --> OAI[OpenAI Realtime transcription WS]
+    OAI --> RT
+    RT --> ST
     ST -->|transcript_update / utterance_end| SR
     SR -->|finalized utterance| SF[session_finalize]
     SF -->|should_extract / should_trigger| LG[LangGraph turn graph]
@@ -45,7 +45,7 @@ Exposes:
 - `POST /api/chat`
 
 The websocket endpoint creates a `SessionRuntime` per browser connection. Summary endpoints read from the live session state when it is available, otherwise the ad-hoc summary endpoint uses the same extraction service on supplied text.
-The chat endpoint accepts a plain user message plus optional short chat history and returns a normal LLM reply without Deepgram, utterance finalization, or schema extraction.
+The chat endpoint accepts a plain user message plus optional short chat history and returns a normal LLM reply without live transcription, utterance finalization, or schema extraction.
 
 ### 2. Session Orchestration
 
@@ -57,7 +57,7 @@ The chat endpoint accepts a plain user message plus optional short chat history 
 `SessionRuntime` owns:
 
 - websocket lifecycle
-- Deepgram channel connections
+- OpenAI Realtime transcription channel connections
 - utterance buffering and debounce
 - confidence and noise filtering
 - high-confidence local extraction updates
@@ -65,22 +65,22 @@ The chat endpoint accepts a plain user message plus optional short chat history 
 - per-session message history
 - durable in-memory extracted fields
 
-`session_transport.py` accepts the `start_session` payload from the extension, normalizes Deepgram query params, and opens one Deepgram connection per channel. The current live params include `interim_results`, `multichannel`, and `punctuate`.
+`session_transport.py` accepts the `start_session` payload from the extension, reads `openaiTranscriptionParams`, and opens one OpenAI Realtime transcription connection per channel.
 
-### 3. Deepgram Streaming
+### 3. OpenAI Realtime Transcription
 
-- `backend/app/services/deepgram_client.py`
+- `backend/app/services/openai_realtime_client.py`
 
 Responsibilities:
 
-- build the Deepgram WebSocket URL
-- normalize query params into string form before encoding
-- authorize using the Deepgram API key
-- send binary PCM audio chunks
-- receive transcript payloads
+- connect to the OpenAI Realtime transcription WebSocket
+- configure the transcription model, prompt, VAD, and noise reduction with `session.update`
+- authorize using the OpenAI API key
+- send base64-encoded PCM16 audio chunks with `input_audio_buffer.append`
+- receive transcript delta and completed events
 - close upstream streams cleanly
 
-The live stream uses Nova-3 in this repo. `punctuate=true` is enabled for readability, while `smart_format` stays off to keep latency predictable.
+The live stream uses `gpt-4o-transcribe` by default. Browser capture is configured for 24 kHz mono PCM16 to match OpenAI Realtime transcription input.
 
 ### 4. Turn Graph and LLM Layer
 
@@ -161,7 +161,7 @@ When an utterance finalizes:
 
 - Channel 0 is the customer/tab audio.
 - Channel 1 is the agent/microphone audio when available.
-- Deepgram diarization and channel metadata are used to keep the speaker labels stable.
+- Separate per-channel streams keep the speaker labels stable.
 - Customer turns are the primary source for schema extraction.
 - Agent turns are used for conversational state, call-stage detection, and response context.
 
@@ -218,8 +218,8 @@ Uses the same schema extraction service on supplied conversation text when there
 
 - Session state is currently in-memory only
 - A backend restart clears live session memory
-- Deepgram payloads can contain non-transcript events that must be skipped
-- Two-way conversation quality depends on diarization and audio quality
+- Realtime payloads can contain non-transcript events that must be skipped
+- Two-way conversation quality depends on channel separation and audio quality
 - Punctuation improves readability but does not replace debounce or turn-finalization logic
 
 ## Recommended Next Steps
@@ -227,4 +227,4 @@ Uses the same schema extraction service on supplied conversation text when there
 - persist session/customer state in Redis or a database
 - add regression tests for schema normalization and response formatting
 - log per-turn LLM token usage and skipped-call reasons
-- keep the Deepgram query-param normalization close to the transport boundary
+- keep Realtime transcription session configuration close to the transport boundary
