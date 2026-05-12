@@ -4,13 +4,12 @@ import unittest
 from app.services.session_text import decide_turn_action
 from app.services.session_text import looks_like_transcription_instruction_leak
 from app.services.session_text import should_capture_final_segment
+from app.services.session_transport import asr_message_to_dict
+from app.services.session_transport import extract_sarvam_transcript
+from app.services.session_transport import normalize_sarvam_message
 from app.services.session_transport import should_send_transcript_update
-from app.services.openai_realtime_client import (
-    AGENT_TRANSCRIPTION_PROMPT,
-    OpenAIRealtimeTranscriptionClient,
-    _build_turn_detection,
-    _noise_reduction_config,
-)
+from app.services.sarvam_client import SarvamClient
+from app.services.sarvam_client import build_sarvam_params
 
 
 def test_agent_turn_does_not_trigger_extraction_or_reply():
@@ -69,47 +68,117 @@ def test_filler_turn_still_triggers_raw_customer_processing():
     assert decision.reason == "customer_extract_and_reply"
 
 
+def test_customer_greeting_skips_extraction_but_still_gets_reply():
+    decision = decide_turn_action(
+        utterance="Hello",
+        average_confidence=0.75,
+        speaker="0",
+        last_llm_invoked_at=0.0,
+        cooldown=3.0,
+    )
+
+    assert decision.run_extraction is False
+    assert decision.run_reply is True
+    assert decision.reason == "customer_reply_only"
+
+
 class AgentTranscriptionTest(unittest.TestCase):
-    def test_agent_transcription_uses_literal_channel_prompt(self):
-        client = OpenAIRealtimeTranscriptionClient(
+    def test_sarvam_defaults_to_saaras_translit(self):
+        client = SarvamClient({})
+
+        self.assertEqual(client.model, "saaras:v3")
+        self.assertEqual(client.mode, "translit")
+        self.assertEqual(client.language_code, "hi-IN")
+        self.assertEqual(client.sample_rate, 16000)
+        self.assertEqual(client.input_audio_codec, "pcm_s16le")
+
+    def test_sarvam_params_can_override_audio_settings(self):
+        client = SarvamClient(
             {
-                "prompt": "Transcribe Indian home-loan calls accurately.",
-                "agentPrompt": "Literal agent transcript only.",
+                "model": "saaras:v3",
+                "mode": "codemix",
+                "languageCode": "en-IN",
+                "sampleRate": 8000,
+                "inputAudioCodec": "pcm_l16",
+                "encoding": "audio/wav",
+                "highVadSensitivity": False,
             },
-            channel="agent",
         )
 
-        self.assertEqual(client._resolve_transcription_prompt(), "Literal agent transcript only.")
+        self.assertEqual(client.mode, "codemix")
+        self.assertEqual(client.language_code, "en-IN")
+        self.assertEqual(client.sample_rate, 8000)
+        self.assertEqual(client.input_audio_codec, "pcm_l16")
+        self.assertEqual(client.encoding, "audio/wav")
+        self.assertFalse(client.high_vad_sensitivity)
+        self.assertFalse(client.flush_signal)
+        self.assertEqual(client.flush_interval_seconds, 0)
 
-    def test_agent_transcription_does_not_fall_back_to_customer_prompt(self):
-        client = OpenAIRealtimeTranscriptionClient(
-            {"prompt": "Transcribe Indian home-loan calls accurately."},
-            channel="agent",
+    def test_sarvam_connection_config_maps_query_and_header(self):
+        client = SarvamClient(
+            {"language_code": "hi-IN", "input_audio_codec": "pcm_s16le"}
+        )
+        client.settings.sarvam_api_key = "test-key"
+
+        url, headers = client.connection_config()
+
+        self.assertIn("language-code=hi-IN", url)
+        self.assertIn("input_audio_codec=pcm_s16le", url)
+        self.assertNotIn("encoding=", url)
+        self.assertEqual(headers, {"Api-Subscription-Key": "test-key"})
+
+    def test_build_sarvam_params_prefers_new_payload_name(self):
+        params = build_sarvam_params({"sarvamParams": {"mode": "translit"}})
+
+        self.assertEqual(params, {"mode": "translit"})
+
+    def test_sarvam_transcript_event_is_final_text(self):
+        transcript, is_final = extract_sarvam_transcript(
+            {"type": "data", "data": {"transcript": "mera phone number hai 9840950950"}}
         )
 
-        self.assertEqual(client._resolve_transcription_prompt(), AGENT_TRANSCRIPTION_PROMPT)
+        self.assertEqual(transcript, "mera phone number hai 9840950950")
+        self.assertTrue(is_final)
 
-    def test_customer_transcription_keeps_customer_prompt(self):
-        client = OpenAIRealtimeTranscriptionClient(
-            {"prompt": "Transcribe Indian home-loan calls accurately."},
-            channel="customer",
-        )
+    def test_sarvam_transcript_supports_multiple_response_shapes(self):
+        for payload in (
+            {"type": "data", "data": {"text": "hello"}},
+            {"type": "data", "data": {"translation": "hello translated"}},
+            {"transcript": "root transcript"},
+            {"text": "root text"},
+            {"translation": "root translation"},
+        ):
+            transcript, is_final = extract_sarvam_transcript(payload)
+
+            self.assertTrue(transcript)
+            self.assertTrue(is_final)
+
+    def test_sarvam_message_parser_accepts_model_dump_objects(self):
+        class Message:
+            def model_dump(self):
+                return {"type": "transcript", "text": "haan"}
 
         self.assertEqual(
-            client._resolve_transcription_prompt(),
-            "Transcribe Indian home-loan calls accurately.",
+            asr_message_to_dict(Message()),
+            {"type": "transcript", "text": "haan"},
         )
 
-    def test_noise_reduction_can_be_disabled(self):
-        self.assertEqual(_noise_reduction_config({"noise_reduction": "none"}, "agent"), {})
-        self.assertEqual(_noise_reduction_config({}, "customer"), {})
+    def test_empty_sarvam_data_frame_does_not_become_transcript(self):
+        message = normalize_sarvam_message(
+            {
+                "type": "data",
+                "data": {
+                    "request_id": "req-1",
+                    "transcript": "",
+                    "language_code": "hi-IN",
+                },
+            }
+        )
 
-    def test_default_vad_keeps_more_prefix_audio(self):
-        config = _build_turn_detection({})
+        transcript, is_final = extract_sarvam_transcript(message)
 
-        self.assertEqual(config["threshold"], 0.45)
-        self.assertEqual(config["prefix_padding_ms"], 800)
-        self.assertEqual(config["silence_duration_ms"], 700)
+        self.assertEqual(transcript, "")
+        self.assertFalse(is_final)
 
     def test_agent_interim_transcript_update_is_forwarded_raw(self):
         self.assertTrue(

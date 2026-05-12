@@ -43,7 +43,22 @@ def should_run_llm_extraction(
     if speaker == "1":
         return False
 
-    return bool(str(utterance or "").strip())
+    normalized = normalize_text(utterance)
+    if not normalized:
+        return False
+    if normalized in {
+        "hello",
+        "hi",
+        "hey",
+        "namaste",
+        "namaskar",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    }:
+        return False
+
+    return True
 
 
 def should_invoke_llm(
@@ -99,7 +114,7 @@ def build_known_fields_text(fields: dict[str, str], limit: int = 8) -> str:
 
 
 def build_recent_conversation_context(
-    state: SessionState, limit: int = 8
+    state: SessionState, limit: int = 5
 ) -> str:
     recent_messages = state.messages[-limit:]
     lines: list[str] = []

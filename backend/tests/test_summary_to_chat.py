@@ -87,6 +87,9 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ask for that same field", prompt)
         self.assertIn("Do not add agent self-introduction", prompt)
         self.assertIn('"field": "customer_last_name"', prompt)
+        self.assertNotIn("customer_last_utterance:", prompt)
+        self.assertNotIn("agent_last_utterance:", prompt)
+        self.assertNotIn("context_summary:", prompt)
 
     def test_stream_reply_prompt_clarifies_city_when_state_was_captured(self):
         from app.llm.service import build_stream_reply_prompt
@@ -111,6 +114,9 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("state is noted and ask for current city again", prompt)
         self.assertIn("wrong address part", prompt)
         self.assertIn('"field": "customer_city"', prompt)
+        self.assertNotIn("customer_last_utterance:", prompt)
+        self.assertNotIn("agent_last_utterance:", prompt)
+        self.assertNotIn("context_summary:", prompt)
 
     def test_lead_query_plan_prompt_prefers_only_requested_fields(self):
         from app.llm.service import build_lead_query_plan_prompt
@@ -259,6 +265,26 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Lead ID: 668", context)
         self.assertIn("customer.email: rahul@example.com", context)
         self.assertIn("lead_details.property_city: Noida", context)
+
+    def test_lead_detail_context_selects_message_relevant_fields(self):
+        from app.services.lead_detail_context import build_lead_detail_chat_context
+
+        context = build_lead_detail_chat_context(
+            lead_id=668,
+            lead_detail={
+                "customer": {"first_name": "Rahul", "email": "rahul@example.com"},
+                "lead_details": {
+                    "loan_amount": 2500000,
+                    "property_city": "Noida",
+                    "cibil_score": 760,
+                },
+            },
+            user_message="what is cibil score?",
+        )
+
+        self.assertIn("Lead ID: 668", context)
+        self.assertIn("lead_details.cibil_score: 760", context)
+        self.assertNotIn("customer.email: rahul@example.com", context)
 
     async def test_chat_answers_loaded_lead_field_without_rag(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:

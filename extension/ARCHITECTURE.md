@@ -9,7 +9,7 @@ The system operates as a hub-and-spoke model with the **Background Service Worke
 ### Components:
 - **Background Script (`background.js`)**: Orchestrates the entire system. It manages the extension's state, coordinates communication between components, and handles the streaming interaction with the backend AI service.
 - **Offscreen Document (`offscreen.js`)**: A necessary workaround for Manifest V3. Since service workers cannot capture audio streams or maintain long-running WebSockets efficiently, the Offscreen Document provides a stable environment for audio capture and backend streaming.
-- **Audio Worklet (`capture-worklet.js`)**: A low-latency audio processor running in its own thread. It converts high-fidelity Float32 audio samples into the Int16 PCM format required by OpenAI Realtime transcription.
+- **Audio Worklet (`capture-worklet.js`)**: A low-latency audio processor running in its own thread. It converts high-fidelity Float32 audio samples into 16 kHz Int16 PCM for Sarvam streaming ASR.
 - **Side Panel (`sidepanel.js`)**: The primary user interface. It renders live transcription updates and displays AI-generated responses chunk-by-chunk.
 - **Content Script (`content.js`)**: Used for a basic handshake to ensure the target tab is active and reachable for audio capture.
 
@@ -26,15 +26,15 @@ The system operates as a hub-and-spoke model with the **Background Service Worke
 - The raw stream is fed into an `AudioWorkletNode`.
 - Inside `capture-worklet.js`, the audio is processed in real-time. It down-samples or converts the format (Float32 to Int16) to optimize for network transmission.
 
-### Step 3: Transcription (OpenAI Realtime Streaming)
+### Step 3: Transcription (Sarvam Streaming ASR)
 - The Offscreen Document opens a persistent **WebSocket** connection to the backend.
 - PCM audio data is sent to the backend as it arrives from the worklet.
-- The backend streams audio to OpenAI Realtime transcription and forwards transcript deltas and completed turns to the side panel.
+- The backend streams audio to Sarvam ASR with `saaras:v3` and `mode=translit`, then forwards Roman-script transcript events to the side panel.
 
 ## 3. AI Analysis Pipeline (Backend LLM Streaming)
 
 ### Triggering Analysis
-- OpenAI Realtime server-side VAD commits detected speech turns.
+- Sarvam VAD signals and transcript events identify detected speech turns.
 - The backend finalizes those turns and streams AI suggestions back through the extension runtime.
 
 ### Streaming AI Responses
@@ -69,8 +69,8 @@ graph TD
     OD -->|Audio Stream| AW
     AW -->|PCM Data| OD
     OD -->|WebSocket| BE[Backend]
-    BE -->|OpenAI Realtime| OAI[OpenAI API]
-    OAI -->|Transcript events| BE
+    BE -->|Sarvam Streaming ASR| ASR[Sarvam API]
+    ASR -->|Transcript events| BE
     BE -->|Transcript events| OD
     OD -->|Message| SP
     OD -->|Final Segment| BG

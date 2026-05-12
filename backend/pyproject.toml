@@ -20,4 +20,5 @@ dependencies = [
     "langchain-experimental>=0.4.1",
     "langchain-chroma>=1.1.0",
     "pypdf>=6.10.2",
+    "sarvamai>=0.1.28,<1",
 ]

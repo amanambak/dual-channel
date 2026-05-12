@@ -10,7 +10,8 @@ from app.services.workflow_schema import WorkflowSchema
 from app.services.workflow_schema import load_workflow_schema
 
 
-DEFAULT_MAX_EXTRACTION_FIELDS = 40
+DEFAULT_MAX_EXTRACTION_FIELDS = 15
+EXPECTED_FIELD_MAX_EXTRACTION_FIELDS = 5
 
 
 @dataclass(frozen=True)
@@ -52,13 +53,18 @@ def select_extraction_fields(
         registry=active_registry,
         workflow_schema=active_workflow,
     )
+    effective_max_fields = (
+        min(max_fields, EXPECTED_FIELD_MAX_EXTRACTION_FIELDS)
+        if expected_field
+        else max_fields
+    )
     specs: dict[str, FieldSpec] = {}
     for field_id in ordered_ids:
         definition = active_registry.definition(field_id)
         if not definition or definition.id in specs:
             continue
         specs[definition.id] = field_spec_from_definition(definition)
-        if len(specs) >= max_fields:
+        if len(specs) >= effective_max_fields:
             break
     return ExtractionFieldSelection(specs=specs)
 

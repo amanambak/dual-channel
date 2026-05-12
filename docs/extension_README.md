@@ -26,19 +26,19 @@ This folder contains the plain-JS Chrome extension frontend.
 
 ## Current Config
 
-The extension forwards `OPENAI_TRANSCRIPTION_PARAMS` to the backend as part of `start_session`.
+The extension forwards `SARVAM_TRANSCRIPTION_PARAMS` to the backend as part of `start_session`.
 
 Recommended live values:
 
-- `model: 'gpt-4o-transcribe'`
-- `language: ''`
-- `prompt`
-- `vad_threshold`
-- `prefix_padding_ms`
-- `silence_duration_ms`
-- `noise_reduction: 'near_field'`
+- `model: 'saaras:v3'`
+- `mode: 'translit'`
+- `language_code: 'hi-IN'`
+- `sample_rate: 16000`
+- `input_audio_codec: 'pcm_s16le'`
+- `encoding: 'pcm_s16le'`
+- `high_vad_sensitivity: true`
 
-Do not set OpenAI or LLM API keys in the extension. The backend owns those integrations.
+Do not set Sarvam or LLM API keys in the extension. The backend owns those integrations.
 
 ## UI Contract
 

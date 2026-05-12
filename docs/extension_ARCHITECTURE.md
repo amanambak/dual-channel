@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Chrome extension is the capture and presentation layer for the call-assist system. It does not talk to OpenAI, Gemini, or other model providers directly. Its job is to capture tab and microphone audio, stream PCM to the backend, and render the transcript, call responses, and chat responses that come back from the backend.
+The Chrome extension is the capture and presentation layer for the call-assist system. It does not talk to Sarvam, OpenAI, Gemini, or other model providers directly. Its job is to capture tab and microphone audio, stream PCM to the backend, and render the transcript, call responses, and chat responses that come back from the backend.
 
 ## Current Runtime Split
 
@@ -19,7 +19,7 @@ The Chrome extension is the capture and presentation layer for the call-assist s
 
 ### Backend Responsibilities
 
-- OpenAI Realtime transcription
+- Sarvam streaming ASR
 - utterance segmentation and filtering
 - schema-driven customer-info extraction
 - streaming AI suggestions
@@ -46,17 +46,17 @@ Responsibilities:
 Responsibilities:
 
 - obtains the real audio stream via `getUserMedia`
-- creates an `AudioContext` at 24 kHz
+- creates an `AudioContext` at 16 kHz
 - registers the audio worklet
 - opens the backend WebSocket session at `CONFIG.BACKEND_WS_URL`
 - sends a `start_session` payload containing:
-  - `openaiTranscriptionParams`
+  - `sarvamTranscriptionParams`
   - `modelOverride`
   - `captureMode`
   - channel layout
 - forwards backend transcript and AI events back into extension runtime messages
 
-The current `openaiTranscriptionParams` source includes `model=gpt-4o-transcribe`, optional `language`, a transcription `prompt`, VAD tuning, and noise-reduction mode.
+The current `sarvamTranscriptionParams` source includes `model=saaras:v3`, `mode=translit`, `language_code=hi-IN`, 16 kHz PCM settings, and high VAD sensitivity.
 
 ### 3. Audio Worklet
 
@@ -162,10 +162,10 @@ Important keys:
 
 - `BACKEND_WS_URL`
 - `BACKEND_HTTP_URL`
-- `OPENAI_TRANSCRIPTION_PARAMS`
+- `SARVAM_TRANSCRIPTION_PARAMS`
 - `LLM_MODEL`
 
-The extension does not store OpenAI or LLM API keys. The config file only controls capture parameters, optional model override defaults, and backend endpoints.
+The extension does not store Sarvam or LLM API keys. The config file only controls capture parameters, optional model override defaults, and backend endpoints.
 
 ## Storage
 

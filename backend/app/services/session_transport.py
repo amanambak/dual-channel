@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import WebSocketDisconnect
 
@@ -8,12 +9,14 @@ from app.models.events import ErrorEvent
 from app.models.events import TranscriptEvent
 from app.services.field_resolver import build_resolved_field_state
 from app.services.lead_detail_context import build_priority_missing_fields
-from app.services.openai_realtime_client import OpenAIRealtimeTranscriptionClient
+from app.services.sarvam_client import SarvamClient
+from app.services.sarvam_client import build_sarvam_params
 from app.services.session_text import normalize_confidence
 
 logger = logging.getLogger(__name__)
 
-OPENAI_AUDIO_QUEUE_FRAMES = 240
+ASR_AUDIO_QUEUE_FRAMES = 120
+AUDIO_DIAGNOSTIC_INTERVAL_SECONDS = 5.0
 
 
 def should_send_transcript_update(
@@ -48,6 +51,7 @@ async def run(session) -> None:
             send_queue = session.transcription_send_queues.get(channel)
             if send_queue is not None:
                 audio_frame = bytes(audio_data)
+                _log_audio_received(session, channel, audio_frame, send_queue.qsize())
                 try:
                     send_queue.put_nowait(audio_frame)
                 except asyncio.QueueFull:
@@ -56,7 +60,7 @@ async def run(session) -> None:
                     except asyncio.QueueEmpty:
                         pass
                     send_queue.put_nowait(audio_frame)
-                    logger.warning("Dropped stale OpenAI audio frame for congested channel %s", channel)
+                    logger.warning("Dropped stale ASR audio frame for congested channel %s", channel)
 
 
 def update_lead_context(session, data: dict) -> None:
@@ -100,7 +104,7 @@ async def handle_text_message(session, raw_message: str) -> None:
 
     if message_type == "start_session":
         config = data.get("config", {})
-        params = dict(config.get("openaiTranscriptionParams") or {})
+        params = build_sarvam_params(config)
         session.model_override = (
             config.get("modelOverride") or config.get("aiModel") or config.get("geminiModel")
         )
@@ -115,18 +119,36 @@ async def handle_text_message(session, raw_message: str) -> None:
             )
 
         channels = config.get("channels", ["customer", "agent"])
+        logger.info(
+            "Starting ASR session: session_id=%s channels=%s params=%s",
+            session.session_id,
+            ",".join(channels),
+            {
+                key: value
+                for key, value in params.items()
+                if key not in {"api_key", "apiKey", "SARVAM_API_KEY"}
+            },
+        )
         for ch in channels:
-            client = OpenAIRealtimeTranscriptionClient(params, channel=ch)
+            logger.info(
+                "Starting ASR channel: session_id=%s channel=%s params=%s",
+                session.session_id,
+                ch,
+                {
+                    key: value
+                    for key, value in params.items()
+                    if key not in {"api_key", "apiKey", "SARVAM_API_KEY"}
+                },
+            )
+            client = SarvamClient(params)
             await client.connect()
             session.transcription_clients[ch] = client
-            session.transcription_send_queues[ch] = asyncio.Queue(maxsize=OPENAI_AUDIO_QUEUE_FRAMES)
+            session.transcription_send_queues[ch] = asyncio.Queue(maxsize=ASR_AUDIO_QUEUE_FRAMES)
             session.transcription_send_tasks[ch] = asyncio.create_task(send_transcription(session, ch))
             session.transcription_tasks[ch] = asyncio.create_task(read_transcription(session, ch))
-            session.transcription_keepalive_tasks[ch] = asyncio.create_task(
-                keepalive_transcription(session, ch)
-            )
 
         await session.send_json({"type": "session_started", "sessionId": session.session_id})
+        logger.info("ASR session ready: session_id=%s channels=%s", session.session_id, ",".join(channels))
         return
 
     if message_type == "lead_context":
@@ -144,13 +166,15 @@ async def read_transcription(session, channel: str) -> None:
     try:
         while True:
             raw_message = await transcriber.recv()
-            data = json.loads(raw_message)
+            data = asr_message_to_dict(raw_message)
+            _log_empty_asr_data_frame(session, channel, data)
+            data = normalize_sarvam_message(data)
             data["channel_id"] = channel
             await handle_transcription_message(session, data)
     except Exception as exc:
         if not session.closed:
-            logger.exception("OpenAI transcription read failed for channel %s", channel)
-            await session.send_model(ErrorEvent(source="OpenAI Realtime", message=str(exc)))
+            logger.exception("Sarvam transcription read failed for channel %s", channel)
+            await session.send_model(ErrorEvent(source="Sarvam ASR", message=str(exc)))
 
 
 async def send_transcription(session, channel: str) -> None:
@@ -163,78 +187,48 @@ async def send_transcription(session, channel: str) -> None:
             audio_data = await send_queue.get()
             try:
                 if not await transcriber.send_audio(audio_data):
-                    logger.warning("OpenAI transcription channel %s closed while sending audio", channel)
+                    logger.warning("ASR channel %s closed while sending audio", channel)
                     session.transcription_clients.pop(channel, None)
                     task = session.transcription_tasks.pop(channel, None)
                     if task:
                         task.cancel()
-                    keepalive_task = session.transcription_keepalive_tasks.pop(channel, None)
-                    if keepalive_task:
-                        keepalive_task.cancel()
                     break
+                _log_audio_sent(session, channel, audio_data)
+                await transcriber.flush_if_due()
             finally:
                 send_queue.task_done()
     except asyncio.CancelledError:
         return
     except Exception as exc:
         if not session.closed:
-            logger.exception("OpenAI transcription send failed for channel %s", channel)
-            await session.send_model(ErrorEvent(source="OpenAI Realtime", message=str(exc)))
-
-
-async def keepalive_transcription(session, channel: str) -> None:
-    transcriber = session.transcription_clients.get(channel)
-    if not transcriber:
-        return
-    try:
-        while not session.closed and channel in session.transcription_clients:
-            await asyncio.sleep(5)
-            if not await transcriber.send_keepalive():
-                logger.info("Stopping OpenAI transcription keepalive for closed channel %s", channel)
-                break
-    except asyncio.CancelledError:
-        return
-    except Exception as exc:
-        if not session.closed:
-            logger.warning("OpenAI transcription keepalive failed for channel %s: %s", channel, exc)
+            logger.exception("Sarvam transcription send failed for channel %s", channel)
+            await session.send_model(ErrorEvent(source="Sarvam ASR", message=str(exc)))
 
 
 async def handle_transcription_message(session, data: dict) -> None:
     event_type = data.get("type")
     channel_id = data.get("channel_id", "customer")
     if event_type in {
-        "session.created",
-        "session.updated",
-        "input_audio_buffer.speech_started",
-        "input_audio_buffer.speech_stopped",
-        "conversation.item.input_audio_transcription.delta",
-        "conversation.item.input_audio_transcription.completed",
+        "speech_start",
+        "speech_end",
+        "transcript",
     }:
         logger.info(
-            "OpenAI transcription event: channel=%s type=%s item_id=%s snippet=%s",
+            "Sarvam transcription event: channel=%s type=%s snippet=%s",
             channel_id,
             event_type,
-            data.get("item_id"),
             str(
-                data.get("transcript")
-                or data.get("text")
-                or data.get("delta")
-                or ""
+                data.get("text") or data.get("transcript") or ""
             )[:80],
         )
     if event_type == "error":
         error = data.get("error") if isinstance(data.get("error"), dict) else {}
-        message = error.get("message") or data.get("message") or "Realtime transcription error"
-        await session.send_model(ErrorEvent(source="OpenAI Realtime", message=str(message)))
-        return
-    if event_type == "conversation.item.input_audio_transcription.segment":
+        message = error.get("message") or data.get("message") or "Sarvam transcription error"
+        await session.send_model(ErrorEvent(source="Sarvam ASR", message=str(message)))
         return
 
-    transcript, is_final, item_id = extract_openai_transcript(session, data)
-    if not transcript and event_type not in {
-        "input_audio_buffer.speech_started",
-        "input_audio_buffer.speech_stopped",
-    }:
+    transcript, is_final = extract_sarvam_transcript(data)
+    if not transcript and event_type not in {"speech_start", "speech_end"}:
         return
 
     channel_id = data.get("channel_id", "customer")
@@ -243,10 +237,10 @@ async def handle_transcription_message(session, data: dict) -> None:
     speaker = speaker_map.get(channel_id, "0")
 
     metadata = {
-        "confidence": extract_logprob_confidence(data) if is_final else None,
-        "speech_final": event_type == "input_audio_buffer.speech_stopped",
+        "confidence": 0.75,
+        "speech_final": event_type == "speech_end",
         "channel": channel_id,
-        "item_id": item_id,
+        "provider": "sarvam",
     }
 
     if transcript:
@@ -287,49 +281,152 @@ async def handle_transcription_message(session, data: dict) -> None:
         if metadata["speech_final"] and session.state.current_segments:
             session._schedule_finalize()
 
-    if event_type == "conversation.item.input_audio_transcription.completed":
-        if session.state.current_segments:
-            session._schedule_finalize()
+    if event_type == "transcript" and session.state.current_segments:
+        session._schedule_finalize()
 
 
-def extract_openai_transcript(session, data: dict) -> tuple[str, bool, str | None]:
+def extract_sarvam_transcript(data: dict) -> tuple[str, bool]:
+    transcript = _first_text(
+        data,
+        ("data", "transcript"),
+        ("data", "text"),
+        ("data", "translation"),
+        ("transcript",),
+        ("text",),
+        ("translation",),
+    )
+    if transcript:
+        return transcript, True
+    return "", False
+
+
+def normalize_sarvam_message(data: dict) -> dict:
     event_type = data.get("type")
-    channel_id = str(data.get("channel_id", "customer"))
-    item_id = data.get("item_id")
-    item_key = str(item_id or data.get("event_id") or "")
+    payload = data.get("data") if isinstance(data.get("data"), dict) else {}
 
-    if event_type == "conversation.item.input_audio_transcription.delta":
-        delta = str(data.get("delta") or "")
-        if not delta:
-            return "", False, item_id
-        key = (channel_id, item_key)
-        transcript = f"{session.transcript_delta_buffers.get(key, '')}{delta}"
-        session.transcript_delta_buffers[key] = transcript
-        return transcript, False, item_id
+    transcript, _ = extract_sarvam_transcript(data)
+    if transcript:
+        return {
+            "type": "transcript",
+            "text": transcript,
+            "request_id": payload.get("request_id") or data.get("request_id"),
+            "language_code": payload.get("language_code") or data.get("language_code"),
+        }
 
-    if event_type == "conversation.item.input_audio_transcription.completed":
-        transcript = str(data.get("transcript") or "")
-        if item_key:
-            session.transcript_delta_buffers.pop((channel_id, item_key), None)
-        return transcript, True, item_id
+    if event_type == "events":
+        signal_type = str(payload.get("signal_type") or payload.get("event_type") or "")
+        if signal_type == "START_SPEECH":
+            return {"type": "speech_start", **payload}
+        if signal_type == "END_SPEECH":
+            return {"type": "speech_end", **payload}
 
-    return "", False, item_id
+    if event_type == "error":
+        return {
+            "type": "error",
+            "message": payload.get("error") or data.get("message") or "Sarvam transcription error",
+            "code": payload.get("code"),
+        }
+
+    return data
 
 
-def extract_logprob_confidence(data: dict) -> float | None:
-    logprobs = data.get("logprobs")
-    if not isinstance(logprobs, list) or not logprobs:
-        return None
-    probabilities = []
-    for item in logprobs:
-        if not isinstance(item, dict):
-            continue
-        logprob = item.get("logprob")
-        if isinstance(logprob, (int, float)):
-            probabilities.append(2.718281828459045 ** float(logprob))
-    if not probabilities:
-        return None
-    return sum(probabilities) / len(probabilities)
+def asr_message_to_dict(raw_message) -> dict:
+    if isinstance(raw_message, str):
+        return json.loads(raw_message)
+    if isinstance(raw_message, dict):
+        return dict(raw_message)
+    if hasattr(raw_message, "model_dump"):
+        return raw_message.model_dump()
+    if hasattr(raw_message, "dict"):
+        return raw_message.dict()
+    return dict(raw_message)
+
+
+def _first_text(data: dict, *paths: tuple[str, ...]) -> str:
+    for path in paths:
+        value = data
+        for key in path:
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _log_audio_received(session, channel: str, audio_frame: bytes, queue_size: int) -> None:
+    count = _increment_counter(session.audio_receive_counts, channel)
+    if not _should_log_counter(session.last_audio_receive_log_at, channel, count):
+        return
+    logger.info(
+        "Backend received audio frame: session_id=%s channel=%s frames=%d bytes=%d peak=%d queue=%d",
+        session.session_id,
+        channel,
+        count,
+        len(audio_frame),
+        _pcm16_peak(audio_frame),
+        queue_size,
+    )
+
+
+def _log_audio_sent(session, channel: str, audio_frame: bytes) -> None:
+    count = _increment_counter(session.audio_send_counts, channel)
+    if not _should_log_counter(session.last_audio_send_log_at, channel, count):
+        return
+    logger.info(
+        "Sent audio frame to ASR: session_id=%s channel=%s frames=%d bytes=%d peak=%d",
+        session.session_id,
+        channel,
+        count,
+        len(audio_frame),
+        _pcm16_peak(audio_frame),
+    )
+
+
+def _log_empty_asr_data_frame(session, channel: str, data: dict) -> None:
+    if data.get("type") != "data":
+        return
+    if _first_text(data, ("data", "transcript"), ("data", "text"), ("data", "translation")):
+        return
+    payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+    count = _increment_counter(session.asr_empty_counts, channel)
+    if not _should_log_counter(session.last_asr_empty_log_at, channel, count):
+        return
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    logger.info(
+        "ASR returned empty transcript: session_id=%s channel=%s empty_frames=%d audio_duration=%s latency=%s request_id=%s",
+        session.session_id,
+        channel,
+        count,
+        metrics.get("audio_duration"),
+        metrics.get("processing_latency"),
+        payload.get("request_id"),
+    )
+
+
+def _increment_counter(counters: dict[str, int], channel: str) -> int:
+    counters[channel] = counters.get(channel, 0) + 1
+    return counters[channel]
+
+
+def _should_log_counter(last_log_at: dict[str, float], channel: str, count: int) -> bool:
+    now = time.monotonic()
+    previous = last_log_at.get(channel, 0.0)
+    if count == 1 or now - previous >= AUDIO_DIAGNOSTIC_INTERVAL_SECONDS:
+        last_log_at[channel] = now
+        return True
+    return False
+
+
+def _pcm16_peak(payload: bytes) -> int:
+    limit = len(payload) - (len(payload) % 2)
+    peak = 0
+    for index in range(0, limit, 2):
+        sample = int.from_bytes(payload[index : index + 2], "little", signed=True)
+        peak = max(peak, abs(sample))
+    return peak
 
 
 async def close(session) -> None:
@@ -355,9 +452,3 @@ async def close(session) -> None:
         if task:
             task.cancel()
     session.transcription_tasks.clear()
-
-    for task in session.transcription_keepalive_tasks.values():
-        if task:
-            task.cancel()
-    session.transcription_keepalive_tasks.clear()
-    session.transcript_delta_buffers.clear()

@@ -295,6 +295,7 @@ pydantic==2.13.3
     #   langsmith
     #   openai
     #   pydantic-settings
+    #   sarvamai
 pydantic-core==2.46.3
     # via pydantic
 pydantic-settings==2.10.1
@@ -355,6 +356,8 @@ rpds-py==0.30.0
     # via
     #   jsonschema
     #   referencing
+sarvamai==0.1.28
+    # via backend (pyproject.toml)
 shellingham==1.5.4
     # via typer
 six==1.17.0
@@ -438,6 +441,7 @@ websocket-client==1.9.0
 websockets==15.0.1
     # via
     #   backend (pyproject.toml)
+    #   sarvamai
     #   uvicorn
 xxhash==3.6.0
     # via

@@ -5,7 +5,7 @@ FastAPI backend for the Chrome extension call-assist system.
 ## Responsibilities
 
 - Accept live PCM audio over `WS /ws/session`
-- Stream audio to OpenAI Realtime for transcription
+- Stream audio to Sarvam ASR for Roman-script transcription/transliteration
 - Aggregate transcript chunks into utterances
 - Filter noise, filler, low-confidence speech, and incomplete trailing fragments
 - Generate live caller suggestions through a single LangChain-based LLM service
@@ -33,8 +33,8 @@ FastAPI backend for the Chrome extension call-assist system.
   WebSocket session entrypoint and summary APIs
 - [app/services/session_manager.py](/home/amanpaswan/Documents/final/backend/app/services/session_manager.py)
   Session orchestration, transcript gating, utterance finalization, and LLM triggering
-- [app/services/openai_realtime_client.py](app/services/openai_realtime_client.py)
-  Upstream OpenAI Realtime transcription client
+- [app/services/sarvam_client.py](app/services/sarvam_client.py)
+  Upstream Sarvam streaming ASR client
 - [app/llm/service.py](app/llm/service.py)
   Single LangChain-based LLM entrypoint for prompts, summaries, extraction, and streaming replies
 - [app/graph/](app/graph/)

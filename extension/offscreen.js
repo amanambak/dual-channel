@@ -49,7 +49,7 @@ async function startCapture(streamId, captureMode = 'gmeet') {
     });
 
     audioContext = new AudioContext({
-      sampleRate: 24000
+      sampleRate: 16000
     });
 
     // Create gain nodes for each channel
@@ -285,11 +285,13 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
     queuedAudioFrames = [];
 
     socket.onopen = () => {
-      const params = { ...(CONFIG.OPENAI_TRANSCRIPTION_PARAMS || {}) };
+      const sarvamParams = {
+        ...(CONFIG.SARVAM_PARAMS || {})
+      };
       socket.send(JSON.stringify({
         type: 'start_session',
         config: {
-          openaiTranscriptionParams: params,
+          sarvamParams,
           modelOverride: CONFIG.LLM_MODEL || null,
           captureMode,
           channels: hasMicChannel ? ['customer', 'agent'] : ['customer']

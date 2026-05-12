@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The backend is the real-time processing core for the Chrome extension. It accepts the browser WebSocket session, opens one OpenAI Realtime transcription connection per active audio channel, segments turns, runs schema-driven customer-info extraction, streams AI suggestions back to the extension, and exposes a separate chat-only LLM endpoint for the side panel chat tab.
+The backend is the real-time processing core for the Chrome extension. It accepts the browser WebSocket session, opens one Sarvam streaming ASR connection per active audio channel, segments turns, runs schema-driven customer-info extraction, streams AI suggestions back to the extension, and exposes a separate chat-only LLM endpoint for the side panel chat tab.
 
 ## High-Level Flow
 
@@ -12,9 +12,9 @@ graph TD
     API --> SM[SessionManager]
     SM --> SR[SessionRuntime]
     SR --> ST[session_transport]
-    ST --> RT[OpenAIRealtimeTranscriptionClient]
-    RT --> OAI[OpenAI Realtime transcription WS]
-    OAI --> RT
+    ST --> RT[SarvamStreamingTranscriptionClient]
+    RT --> ASR[Sarvam streaming ASR]
+    ASR --> RT
     RT --> ST
     ST -->|transcript_update / utterance_end| SR
     SR -->|finalized utterance| SF[session_finalize]
@@ -56,7 +56,7 @@ The chat endpoint accepts a plain user message plus optional short chat history 
 `SessionRuntime` owns:
 
 - websocket lifecycle
-- OpenAI Realtime transcription channel connections
+- Sarvam streaming ASR channel connections
 - utterance buffering and debounce
 - confidence and noise filtering
 - high-confidence local extraction updates
@@ -64,22 +64,22 @@ The chat endpoint accepts a plain user message plus optional short chat history 
 - per-session message history
 - durable in-memory extracted fields
 
-`session_transport.py` accepts the `start_session` payload from the extension, reads `openaiTranscriptionParams`, and opens one OpenAI Realtime transcription connection per channel.
+`session_transport.py` accepts the `start_session` payload from the extension, reads `sarvamTranscriptionParams`, and opens one Sarvam streaming ASR connection per channel.
 
-### 3. OpenAI Realtime Transcription
+### 3. Sarvam Streaming ASR
 
-- `backend/app/services/openai_realtime_client.py`
+- `backend/app/services/sarvam_streaming_client.py`
 
 Responsibilities:
 
-- connect to the OpenAI Realtime transcription WebSocket
-- configure the transcription model, prompt, VAD, and noise reduction with `session.update`
-- authorize using the OpenAI API key
-- send base64-encoded PCM16 audio chunks with `input_audio_buffer.append`
-- receive transcript delta and completed events
+- connect to Sarvam streaming speech-to-text
+- configure `saaras:v3`, `mode=translit`, language, PCM codec, sample rate, and VAD sensitivity
+- authorize using the Sarvam API key
+- send base64-encoded PCM16 audio chunks
+- receive speech boundary and transcript events
 - close upstream streams cleanly
 
-The live stream uses `gpt-4o-transcribe` by default. Browser capture is configured for 24 kHz mono PCM16 to match OpenAI Realtime transcription input.
+The live stream uses `saaras:v3` with `mode=translit` by default. Browser capture is configured for 16 kHz mono PCM16 to match Sarvam streaming ASR input.
 
 ### 4. Turn Graph and LLM Layer
 
@@ -220,4 +220,4 @@ Returns the current session customer-info map:
 - persist session/customer state in Redis or a database
 - add regression tests for schema normalization and response formatting
 - log per-turn LLM token usage and skipped-call reasons
-- keep Realtime transcription session configuration close to the transport boundary
+- keep Sarvam ASR session configuration close to the transport boundary

@@ -7,6 +7,24 @@ from app.services.workflow_state import compute_workflow_state
 
 
 class ExtractionFieldSelectorTest(unittest.TestCase):
+    def test_default_selection_is_capped_to_fifteen_fields(self):
+        selection = select_extraction_fields(
+            utterance="loan amount 30 lakh, salary 1 lakh, cibil 760, property noida",
+            agent_utterance="Sir details bata dijiye.",
+        )
+
+        self.assertLessEqual(len(selection.specs), 15)
+
+    def test_expected_field_fast_path_caps_to_five_fields(self):
+        selection = select_extraction_fields(
+            utterance="7 July 2000",
+            agent_utterance="Sir DOB bata dijiye.",
+            expected_field="dob",
+        )
+
+        self.assertLessEqual(len(selection.specs), 5)
+        self.assertIn("customer_dob", selection.specs)
+
     def test_core_json_only_field_is_available_without_csv_entry(self):
         registry = load_field_registry()
 

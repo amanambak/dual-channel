@@ -835,6 +835,109 @@ def _path_search_tokens(path: str) -> set[str]:
     return tokens
 
 
+def _parent_path(path: str) -> str:
+    return path.rsplit(".", 1)[0] if "." in path else ""
+
+
+def _lead_context_score_path(
+    path: str,
+    *,
+    normalized_message: str,
+    message_tokens: set[str],
+) -> int:
+    aliases = set(_path_aliases(path))
+    aliases.update(
+        _normalize_lookup_text(spec_alias)
+        for spec in LEAD_FIELD_CATALOG
+        if spec.path == path
+        for spec_alias in spec.aliases
+    )
+    aliases = {alias for alias in aliases if alias}
+
+    score = 0
+    for alias in aliases:
+        alias_tokens = set(alias.split())
+        if alias and (
+            (" " in alias and alias in normalized_message)
+            or (" " not in alias and alias in message_tokens)
+        ):
+            score = max(score, 100 + len(alias_tokens))
+        elif alias_tokens and alias_tokens.issubset(message_tokens):
+            score = max(score, 80 + len(alias_tokens))
+        else:
+            overlap = len(alias_tokens & message_tokens)
+            if overlap:
+                score = max(score, overlap)
+
+    path_tokens = _path_search_tokens(path)
+    token_overlap = path_tokens & message_tokens
+    if token_overlap:
+        score = max(score, len(token_overlap))
+        leaf = path.rsplit(".", 1)[-1]
+        leaf_tokens = _tokenize_search_text(leaf)
+        if leaf_tokens & message_tokens:
+            score += 20
+
+    return score
+
+
+def _select_lead_context_entries(
+    *,
+    message: str,
+    flattened: list[tuple[str, Any]],
+    max_fields: int,
+    nearby_fields_per_match: int = 4,
+) -> list[tuple[str, Any]] | None:
+    if not _looks_like_lead_detail_question(message):
+        return None
+
+    normalized_message = _normalize_lookup_text(message)
+    message_tokens = {
+        token for token in normalized_message.split() if token not in QUESTION_STOPWORDS
+    }
+    if not message_tokens:
+        return None
+
+    scored: list[tuple[int, int, str, Any]] = []
+    for index, (path, value) in enumerate(flattened):
+        if path.endswith("__typename"):
+            continue
+        score = _lead_context_score_path(
+            path,
+            normalized_message=normalized_message,
+            message_tokens=message_tokens,
+        )
+        if score:
+            scored.append((score, index, path, value))
+
+    if not scored:
+        return None
+
+    selected: dict[str, tuple[str, Any]] = {}
+    for score, index, path, value in sorted(
+        scored,
+        key=lambda item: (-item[0], item[1]),
+    ):
+        selected[path] = (path, value)
+        parent = _parent_path(path)
+        if not parent:
+            continue
+
+        nearby_count = 0
+        for nearby_path, nearby_value in flattened[index + 1 :]:
+            if nearby_count >= nearby_fields_per_match:
+                break
+            if nearby_path.endswith("__typename") or _parent_path(nearby_path) != parent:
+                continue
+            selected.setdefault(nearby_path, (nearby_path, nearby_value))
+            nearby_count += 1
+
+        if len(selected) >= max_fields:
+            break
+
+    return list(selected.values())[:max_fields]
+
+
 def _catalog_paths_for_groups(groups: list[str]) -> set[str]:
     normalized_groups = {group.strip().lower() for group in groups if group.strip()}
     return {
@@ -1011,7 +1114,7 @@ def build_priority_missing_fields(
     return priority_missing
 
 
-def format_priority_missing_context(priority_missing_fields: list[dict[str, Any]], *, limit: int = 8) -> str:
+def format_priority_missing_context(priority_missing_fields: list[dict[str, Any]], *, limit: int = 5) -> str:
     rows: list[str] = []
     for item in priority_missing_fields[:limit]:
         if not isinstance(item, dict):
@@ -1982,6 +2085,7 @@ def build_lead_detail_chat_context(
     lead_dre_document_error: str | None = None,
     lead_context: Any = None,
     document_only: bool = False,
+    user_message: str = "",
     max_flat_fields: int = 160,
 ) -> str:
     if lead_context:
@@ -2015,16 +2119,26 @@ def build_lead_detail_chat_context(
         return "\n\n".join(sections)
 
     flattened = list(iter_leaf_entries(lead_detail))
+    selected_entries = (
+        _select_lead_context_entries(
+            message=user_message,
+            flattened=flattened,
+            max_fields=min(max_flat_fields, 24),
+        )
+        if user_message
+        else None
+    )
+    context_entries = selected_entries or flattened
     important_lines: list[str] = []
     searchable_lines: list[str] = []
     seen_paths: set[str] = set()
 
-    for path, value in flattened:
+    for path, value in context_entries:
         if path in IMPORTANT_PATHS:
             important_lines.append(f"- {path}: {_format_value(value)}")
             seen_paths.add(path)
 
-    for path, value in flattened:
+    for path, value in context_entries:
         if path in seen_paths or path.endswith("__typename"):
             continue
         searchable_lines.append(f"- {path}: {_format_value(value)}")

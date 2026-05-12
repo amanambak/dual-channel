@@ -33,10 +33,14 @@ class SessionRuntime:
         self.transcription_clients = {}
         self.turn_graph = TurnGraphService()
         self.transcription_tasks: dict[str, asyncio.Task] = {}
-        self.transcription_keepalive_tasks: dict[str, asyncio.Task] = {}
         self.transcription_send_tasks: dict[str, asyncio.Task] = {}
         self.transcription_send_queues: dict[str, asyncio.Queue[bytes]] = {}
-        self.transcript_delta_buffers: dict[tuple[str, str], str] = {}
+        self.audio_receive_counts: dict[str, int] = {}
+        self.audio_send_counts: dict[str, int] = {}
+        self.asr_empty_counts: dict[str, int] = {}
+        self.last_audio_receive_log_at: dict[str, float] = {}
+        self.last_audio_send_log_at: dict[str, float] = {}
+        self.last_asr_empty_log_at: dict[str, float] = {}
         self.ai_lock = asyncio.Lock()
         self.closed = False
         self.connection_closed = False
@@ -65,7 +69,7 @@ class SessionRuntime:
     async def finalize_utterance(self) -> None:
         await finalize_utterance_helper(self)
 
-    def build_recent_conversation_context(self, limit: int = 8) -> str:
+    def build_recent_conversation_context(self, limit: int = 5) -> str:
         return build_recent_conversation_context(self.state, limit=limit)
 
     def build_known_fields_text(self, limit: int = 8) -> str:

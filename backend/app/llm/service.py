@@ -190,9 +190,7 @@ def build_stream_reply_prompt(
     return (
         f"{STREAM_SYSTEM_PROMPT}\n\n"
         f"Already known customer fields (do NOT re-extract these): {known_str}{priority_instruction}{workflow_instruction}\n"
-        f"customer_last_utterance: {customer_last_utterance}\n"
-        f"agent_last_utterance: {agent_last_utterance}\n"
-        f"context_summary: {context_summary}{anti_repeat}\n\n"
+        f"{anti_repeat}\n\n"
         f"<conversation>\n{conversation_context}\n\nCurrent utterance: {utterance}\n</conversation>"
     )
 
@@ -1080,6 +1078,7 @@ class LLMService:
             lead_dre_document_error=lead_dre_document_error,
             lead_context=canonical_lead_context,
             document_only=is_document_question,
+            user_message=message,
         )
         
         # 2. Build prompt with context
