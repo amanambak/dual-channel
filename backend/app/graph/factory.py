@@ -15,18 +15,24 @@ def get_turn_graph():
 
     graph = StateGraph(TurnState)
     graph.add_node("extract_schema", nodes["extract_schema"])
+    graph.add_node("route_category", nodes["route_category"])
+    graph.add_node("compute_workflow_state", nodes["compute_workflow_state"])
+    graph.add_node("select_next_action", nodes["select_next_action"])
     graph.add_node("generate_response", nodes["generate_response"])
     graph.add_conditional_edges(
         START,
         lambda state: "extract_schema" if state.get("should_extract") else (
-            "generate_response" if state.get("should_trigger") else END
+            "route_category" if state.get("should_trigger") else END
         ),
-        ["extract_schema", "generate_response", END],
+        ["extract_schema", "route_category", END],
     )
     graph.add_conditional_edges(
         "extract_schema",
-        lambda state: "generate_response" if state.get("should_trigger") else END,
-        ["generate_response", END],
+        lambda state: "route_category" if state.get("should_trigger") else END,
+        ["route_category", END],
     )
+    graph.add_edge("route_category", "compute_workflow_state")
+    graph.add_edge("compute_workflow_state", "select_next_action")
+    graph.add_edge("select_next_action", "generate_response")
     graph.add_edge("generate_response", END)
     return graph.compile(checkpointer=MemorySaver())

@@ -1,0 +1,1924 @@
+{
+  "metadata": {
+    "title": "Core Database Field Mapping for AI/LLM",
+    "description": "Filtered field mappings for Lead, Customer, Lead Detail, and Split Payment tables",
+    "version": "1.0",
+    "generated_date": "2026-05-08",
+    "purpose": "AI Assistance & Suggestion System - Core Tables Only"
+  },
+  "tables": {
+    "finex_lead": {
+      "description": "Core table representing every home loan / LAP application. Progresses through multi-stage lifecycle (New → Login → Sanctioned → Disbursed or Lost)",
+      "category": "core",
+      "priority": "P1-core",
+      "fields": {
+        "id": {
+          "type": "INT",
+          "purpose": "Primary key - auto-increment",
+          "nullable": "NO"
+        },
+        "status_id": {
+          "type": "INT",
+          "purpose": "Macro stage of loan journey",
+          "nullable": "NO",
+          "key_values": {
+            "1": "New Lead",
+            "2": "Login",
+            "3": "Sanctioned",
+            "4": "Disbursed",
+            "5": "Lost",
+            "10": "New - Not Connected",
+            "20": "Call Back",
+            "21": "Interested - Contacted",
+            "22": "Not Interested - Contacted",
+            "30": "Interested - Qualified",
+            "31": "Not Interested - Qualified",
+            "35": "Login Consent",
+            "40": "Not Eligible"
+          },
+          "stage": {
+            "1": "Pre-Login",
+            "2": "Login",
+            "3": "Sanctioned",
+            "4": "Disbursed",
+            "5": "Lost"
+          }
+        },
+        "sub_status_id": {
+          "type": "INT",
+          "purpose": "Granular sub-stage within macro status",
+          "nullable": "NO",
+          "references": "finex_sub_status_master_new.id",
+          "ranges": {
+            "1": "New Lead Fresh",
+            "50-55": "Not Connected sub-reasons",
+            "100-125": "Call Back sub-reasons",
+            "200-299": "Contacted sub-reasons",
+            "300-399": "Not Interested sub-reasons",
+            "400-599": "Qualified sub-reasons",
+            "600": "Login - Underwriting",
+            "605": "Login - Query Raised",
+            "700": "Sanctioned - Registry Pending",
+            "800-899": "Disbursed sub-statuses",
+            "900": "Lost - Reason logged"
+          }
+        },
+        "last_status_id": {
+          "type": "INT",
+          "purpose": "Previous status before last transition - for audit"
+        },
+        "last_sub_status_id": {
+          "type": "INT",
+          "purpose": "Previous sub-status before last transition"
+        },
+        "status": {
+          "type": "VARCHAR",
+          "purpose": "Human-readable status label (denormalized)"
+        },
+        "loan_type": {
+          "type": "INT",
+          "purpose": "Type of loan product",
+          "key_values": {
+            "1": "Home Loan (HL)",
+            "2": "Loan Against Property (LAP)"
+          }
+        },
+        "loan_sub_type": {
+          "type": "VARCHAR",
+          "purpose": "Sub-type of loan (resale, construction) - varies by bank"
+        },
+        "fulfillment_type": {
+          "type": "VARCHAR",
+          "purpose": "Processing mode - who handles lead",
+          "key_values": {
+            "self": "Customer/partner self-fulfilled",
+            "ambak": "Ambak fulfilled (field sales)"
+          }
+        },
+        "doc_status": {
+          "type": "VARCHAR",
+          "purpose": "Overall document collection status",
+          "key_values": {
+            "0": "Pending",
+            "1": "Uploaded",
+            "2": "Verified"
+          }
+        },
+        "tranche_type": {
+          "type": "VARCHAR",
+          "purpose": "Disbursement type",
+          "key_values": {
+            "1": "Single disbursement",
+            "2": "Multi-tranche disbursement"
+          }
+        },
+        "disbursement_done": {
+          "type": "VARCHAR",
+          "purpose": "Whether final disbursement completed",
+          "key_values": {
+            "0": "Not done",
+            "1": "Done"
+          }
+        },
+        "is_login_verified": {
+          "type": "VARCHAR",
+          "purpose": "Login stage verification status",
+          "key_values": {
+            "0": "Verification Pending",
+            "1": "Verified",
+            "2": "Verification Failed",
+            "3": "Confirmation Pending"
+          }
+        },
+        "is_sanction_verified": {
+          "type": "VARCHAR",
+          "purpose": "Sanction stage verification status",
+          "key_values": {
+            "0": "Verification Pending",
+            "1": "Verified",
+            "2": "Verification Failed"
+          }
+        },
+        "is_disbursal_verified": {
+          "type": "VARCHAR",
+          "purpose": "Disbursal stage verification status",
+          "key_values": {
+            "0": "Verification Pending",
+            "1": "Verified",
+            "2": "Verification Failed",
+            "3": "Confirmation Pending"
+          }
+        },
+        "kyc_status": {
+          "type": "VARCHAR",
+          "purpose": "KYC completion (Aadhaar + PAN uploaded)",
+          "key_values": {
+            "0": "Not Done",
+            "1": "Done"
+          }
+        },
+        "credit_pending": {
+          "type": "VARCHAR",
+          "purpose": "Which team has credit hold on lead",
+          "key_values": {
+            "fbm": "FBM team pending resolution",
+            "credit": "Credit team pending approval",
+            "null": "No credit hold"
+          }
+        },
+        "credit_status": {
+          "type": "INT",
+          "purpose": "Granular credit assessment state",
+          "key_values": {
+            "1": "Query Raised",
+            "2": "Pending Approval",
+            "3": "Approved",
+            "8": "Special Override"
+          }
+        },
+        "credit_assign_to": {
+          "type": "INT",
+          "purpose": "User ID of credit team member assigned",
+          "references": "finex_user.id"
+        },
+        "credit_approval_required": {
+          "type": "INT",
+          "purpose": "Whether credit approval required before login",
+          "key_values": {
+            "0": "Not Required",
+            "1": "Required"
+          }
+        },
+        "is_partial_login": {
+          "type": "INT",
+          "purpose": "Whether partial login completed",
+          "key_values": {
+            "0": "Not Done",
+            "1": "Done"
+          }
+        },
+        "is_semi_login": {
+          "type": "INT",
+          "purpose": "Whether semi-login completed",
+          "key_values": {
+            "0": "Not Done",
+            "1": "Done"
+          }
+        },
+        "followup_with": {
+          "type": "VARCHAR",
+          "purpose": "Who owns next followup action",
+          "key_values": {
+            "customer": "Follow up with customer",
+            "financier": "Follow up with bank/financier",
+            "saathi": "Follow up with Saathi",
+            "ambak": "Follow up with Ambak ops",
+            "yoddha": "Follow up with Yoddha"
+          }
+        },
+        "followup_type": {
+          "type": "VARCHAR",
+          "purpose": "Mode of followup",
+          "key_values": {
+            "call": "Phone call followup",
+            "doc_pickup": "Physical document collection"
+          }
+        },
+        "followup_status": {
+          "type": "VARCHAR",
+          "purpose": "Whether followup is pending or completed",
+          "key_values": {
+            "0": "Completed/Done",
+            "1": "Pending/Active"
+          }
+        },
+        "followup_mode": {
+          "type": "INT",
+          "purpose": "How followup was created",
+          "key_values": {
+            "1": "Manual",
+            "2": "System-generated",
+            "3": "Customer-initiated"
+          }
+        },
+        "followup_date": {
+          "type": "DATE",
+          "purpose": "Scheduled date for next followup"
+        },
+        "lead_created_from": {
+          "type": "VARCHAR",
+          "purpose": "Which API/system created this lead",
+          "key_values": {
+            "sfa": "SFA mobile/web app",
+            "web": "Internal web portal",
+            "partner": "Partner API",
+            "saathi_web": "Saathi web platform",
+            "sangam": "Sangam system",
+            "mis": "MIS upload",
+            "website": "Public website",
+            "incentive": "Incentive system"
+          }
+        },
+        "partner_id": {
+          "type": "INT",
+          "purpose": "Partner/DSA responsible for lead",
+          "references": "finex_partner.id"
+        },
+        "bank_id": {
+          "type": "INT",
+          "purpose": "Bank/lender for this lead",
+          "references": "finex_bank.id"
+        },
+        "assign_to": {
+          "type": "INT",
+          "purpose": "Ops/support user currently assigned",
+          "references": "finex_user.id"
+        },
+        "verifier_id": {
+          "type": "INT",
+          "purpose": "User who performed document verification",
+          "references": "finex_user.id"
+        },
+        "new_yoddha_id": {
+          "type": "INT",
+          "purpose": "Yoddha field sales user assigned",
+          "references": "finex_user.id"
+        },
+        "brm_assign_to": {
+          "type": "INT",
+          "purpose": "Business Relationship Manager assigned",
+          "references": "finex_user.id"
+        },
+        "ref_lead_id": {
+          "type": "INT",
+          "purpose": "Self-referential - ID of related/referral lead",
+          "references": "finex_lead.id"
+        },
+        "rm_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - Relationship Manager (External SFA ID)",
+          "note": "NOT finex_user.id - external SFA system ID"
+        },
+        "cbm_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - Consulting Business Manager (External SFA ID)"
+        },
+        "abm_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - Area Business Manager (External SFA ID)"
+        },
+        "sbm_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - City Business Manager (External SFA ID)"
+        },
+        "rh_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - Regional Head (External SFA ID)"
+        },
+        "zh_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - Zonal Head (External SFA ID)"
+        },
+        "nh_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - National Head (External SFA ID)"
+        },
+        "sh_id": {
+          "type": "INT",
+          "purpose": "Sales hierarchy - Sales Head (External SFA ID)"
+        },
+        "reject_reason_id": {
+          "type": "INT",
+          "purpose": "Reason category for lead rejection (when status_id=5)",
+          "references": "finex_rejection_reasons_new.id"
+        },
+        "rejection_type": {
+          "type": "VARCHAR",
+          "purpose": "Classification string for rejection reason",
+          "key_values": {
+            "bank_hard_reject": "Bank hard reject",
+            "CUSTOMER_NOT_RESPONDING": "Customer not responding",
+            "CUSTOMER_NOT_INTERESTED": "Customer not interested",
+            "TEST_LEAD": "Test lead",
+            "DUPLICATE_LEAD": "Duplicate lead"
+          }
+        },
+        "lost_date": {
+          "type": "DATE",
+          "purpose": "Date when lead was marked as lost"
+        },
+        "checklist_id": {
+          "type": "INT",
+          "purpose": "Current checklist stage for document collection",
+          "references": "finex_checklist_status_new.id"
+        },
+        "checklist_sub_status_id": {
+          "type": "INT",
+          "purpose": "Sub-status within checklist stage",
+          "references": "finex_checklist_sub_status.id"
+        },
+        "checklist_query_sub_status_id": {
+          "type": "INT",
+          "purpose": "Query-raised sub-status for login underwriting",
+          "references": "finex_query_sub_status.id"
+        },
+        "created_date": {
+          "type": "DATE",
+          "purpose": "Date the lead was created"
+        },
+        "updated_date": {
+          "type": "DATE",
+          "purpose": "Date of last update"
+        },
+        "first_call_data": {
+          "type": "DATETIME",
+          "purpose": "Timestamp of first call made to customer"
+        },
+        "is_data_encrypted": {
+          "type": "VARCHAR",
+          "purpose": "Whether sensitive fields are encrypted",
+          "key_values": {
+            "0": "Plain text",
+            "1": "Encrypted"
+          }
+        },
+        "is_correct_data": {
+          "type": "VARCHAR",
+          "purpose": "Quality flag - data validated as correct",
+          "key_values": {
+            "0": "Incorrect/Unverified",
+            "1": "Correct"
+          }
+        },
+        "is_qualified": {
+          "type": "VARCHAR",
+          "purpose": "Whether lead passed qualification criteria",
+          "key_values": {
+            "0": "Not Qualified",
+            "1": "Qualified"
+          }
+        },
+        "is_demo": {
+          "type": "VARCHAR",
+          "purpose": "Whether this is a test/demo lead",
+          "key_values": {
+            "0": "Production",
+            "1": "Demo/Test"
+          }
+        },
+        "is_otp_verified": {
+          "type": "INT",
+          "purpose": "Customer mobile OTP verified",
+          "key_values": {
+            "0": "Not Verified",
+            "1": "Verified"
+          }
+        },
+        "is_revisit": {
+          "type": "INT",
+          "purpose": "Whether this is a revisit/returning customer",
+          "key_values": {
+            "0": "First Visit",
+            "1": "Revisit"
+          }
+        },
+        "is_periskope_allowed": {
+          "type": "INT",
+          "purpose": "Periskope WhatsApp integration enabled",
+          "key_values": {
+            "0": "Disabled",
+            "1": "Enabled"
+          }
+        },
+        "is_pending_doc_share": {
+          "type": "INT",
+          "purpose": "Document share request pending",
+          "key_values": {
+            "0": "Not Pending",
+            "1": "Pending"
+          }
+        },
+        "is_legal_doc": {
+          "type": "INT",
+          "purpose": "Legal documents required",
+          "key_values": {
+            "0": "Not Required",
+            "1": "Required"
+          }
+        },
+        "remarks": {
+          "type": "VARCHAR",
+          "purpose": "Free-text notes added by ops/sales"
+        },
+        "lead_category": {
+          "type": "VARCHAR",
+          "purpose": "Pre-qualification categorization"
+        },
+        "qualified_lead_category": {
+          "type": "VARCHAR",
+          "purpose": "Category assigned post-qualification"
+        },
+        "bu_tagging": {
+          "type": "VARCHAR",
+          "purpose": "Business Unit tag for routing/reporting"
+        },
+        "docs_collected": {
+          "type": "VARCHAR",
+          "purpose": "Comma-separated list of document type IDs (e.g., '1,2,3')"
+        },
+        "not_connected_counter": {
+          "type": "INT",
+          "purpose": "Number of 'Not Connected' call attempts"
+        }
+      },
+      "relationships": {
+        "finex_customer": "one_to_one",
+        "finex_lead_detail": "one_to_one",
+        "finex_lead_status_dates": "one_to_one",
+        "finex_customer_co_applicant": "one_to_many",
+        "finex_split_payment": "one_to_many",
+        "finex_lead_checklist": "one_to_many",
+        "finex_lead_history": "one_to_many",
+        "finex_lead_doc": "one_to_many"
+      }
+    },
+    "finex_lead_detail": {
+      "description": "Detailed loan request specifics - loan amount, tenure, property details, employment info, milestone dates. 1:1 relationship with finex_lead",
+      "category": "core",
+      "priority": "P1-core",
+      "parent": "finex_lead",
+      "relationship": "one_to_one",
+      "fields": {
+        "id": {
+          "type": "INT",
+          "purpose": "Primary key"
+        },
+        "lead_id": {
+          "type": "INT",
+          "purpose": "Foreign key to finex_lead",
+          "references": "finex_lead.id"
+        },
+        "bank_id": {
+          "type": "INT",
+          "purpose": "Selected lender bank",
+          "references": "finex_bank.id"
+        },
+        "loan_amount": {
+          "type": "VARCHAR",
+          "purpose": "Requested loan amount"
+        },
+        "tenure": {
+          "type": "INT",
+          "purpose": "Requested loan tenure in months"
+        },
+        "annual_income": {
+          "type": "VARCHAR",
+          "purpose": "Borrower's annual income from ITR/form16"
+        },
+        "monthly_salary": {
+          "type": "VARCHAR",
+          "purpose": "Gross monthly salary"
+        },
+        "gross_monthly_salary": {
+          "type": "VARCHAR",
+          "purpose": "Gross monthly salary including bonuses"
+        },
+        "existing_emi": {
+          "type": "VARCHAR",
+          "purpose": "Total existing EMI obligations"
+        },
+        "no_of_emi": {
+          "type": "INT",
+          "purpose": "Number of remaining EMI months on existing loans"
+        },
+        "profession": {
+          "type": "INT",
+          "purpose": "Employment type",
+          "key_values": {
+            "1": "Salaried Employee",
+            "2": "Business Employee",
+            "3": "Overseas Employee - Seaman",
+            "4": "Overseas Employee - Working on Land",
+            "5": "Allottee"
+          }
+        },
+        "salary_credit_mode": {
+          "type": "INT",
+          "purpose": "How salary is credited"
+        },
+        "work_experience": {
+          "type": "INT",
+          "purpose": "Total years of work experience"
+        },
+        "company_type": {
+          "type": "VARCHAR",
+          "purpose": "Company classification (Govt, Private, PSU, etc.)"
+        },
+        "company_name": {
+          "type": "VARCHAR",
+          "purpose": "Employer's legal company name"
+        },
+        "company_address": {
+          "type": "VARCHAR",
+          "purpose": "Employer company address"
+        },
+        "time_in_current_co": {
+          "type": "INT",
+          "purpose": "Months customer has worked at current company"
+        },
+        "in_hand_monthly_cash_salary": {
+          "type": "VARCHAR",
+          "purpose": "Cash portion of monthly income"
+        },
+        "customer_earn_cash_income": {
+          "type": "INT",
+          "purpose": "Customer earns cash income",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "customer_income_cash_salary_certificate": {
+          "type": "INT",
+          "purpose": "Cash salary certificate submitted",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "itr_file": {
+          "type": "INT",
+          "purpose": "ITR file submitted",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "is_itr_filled": {
+          "type": "VARCHAR",
+          "purpose": "ITR document submitted",
+          "key_values": {
+            "yes": "Submitted",
+            "no": "Not submitted"
+          }
+        },
+        "is_form_16_filled": {
+          "type": "VARCHAR",
+          "purpose": "Form 16 submitted"
+        },
+        "In_Account_Turnover_2cr": {
+          "type": "INT",
+          "purpose": "Account turnover >= 2 Crores in last 12 months",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "is_property_identified": {
+          "type": "VARCHAR",
+          "purpose": "Whether property has been identified/under agreement",
+          "key_values": {
+            "yes": "Property identified",
+            "no": "Not identified"
+          }
+        },
+        "property_value": {
+          "type": "VARCHAR",
+          "purpose": "Current market value of property"
+        },
+        "property_type": {
+          "type": "INT",
+          "purpose": "Type of property",
+          "references": "finex_master_property_type.id"
+        },
+        "property_sub_type": {
+          "type": "INT",
+          "purpose": "Sub-classification of property type",
+          "references": "finex_master_property_sub_type.id"
+        },
+        "usage_type": {
+          "type": "INT",
+          "purpose": "Property usage classification",
+          "references": "finex_master_property_usage_type.id"
+        },
+        "agreement_type": {
+          "type": "INT",
+          "purpose": "Type of property agreement/transfer",
+          "references": "finex_master_agreement_type.id"
+        },
+        "property_address1": {
+          "type": "VARCHAR",
+          "purpose": "First line of property address"
+        },
+        "property_address2": {
+          "type": "VARCHAR",
+          "purpose": "Second line of property address"
+        },
+        "property_pincode": {
+          "type": "VARCHAR",
+          "purpose": "Pincode of property location"
+        },
+        "property_city": {
+          "type": "INT",
+          "purpose": "City where property is located",
+          "references": "city_master.id"
+        },
+        "property_state": {
+          "type": "INT",
+          "purpose": "State of property location",
+          "references": "state_master.id"
+        },
+        "occupancy_status": {
+          "type": "VARCHAR",
+          "purpose": "Occupancy status of property"
+        },
+        "property_authority_id": {
+          "type": "INT",
+          "purpose": "Approving authority for property",
+          "key_values": {
+            "1": "DDA",
+            "2": "NRHP",
+            "3": "Others"
+          }
+        },
+        "property_dda_registration": {
+          "type": "INT",
+          "purpose": "DDA property registration status",
+          "key_values": {
+            "0": "Not registered",
+            "1": "Registered"
+          }
+        },
+        "property_dda_group": {
+          "type": "INT",
+          "purpose": "DDA group classification"
+        },
+        "check_oc_cc": {
+          "type": "VARCHAR",
+          "purpose": "OC/CC status checked"
+        },
+        "ready_for_registration": {
+          "type": "VARCHAR",
+          "purpose": "Property ready for registration"
+        },
+        "is_ats_bba_executed": {
+          "type": "INT",
+          "purpose": "ATS/BBA executed",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "expected_registration_date": {
+          "type": "DATE",
+          "purpose": "Projected date for property registration"
+        },
+        "is_expected_registration_date": {
+          "type": "INT",
+          "purpose": "Whether expected_registration_date is estimated or confirmed",
+          "key_values": {
+            "0": "Confirmed",
+            "1": "Estimated"
+          }
+        },
+        "builder_name_id": {
+          "type": "INT",
+          "purpose": "Builder/developer ID if property in builder project"
+        },
+        "project_name": {
+          "type": "INT",
+          "purpose": "Project ID if property in builder project"
+        },
+        "preferred_project_name": {
+          "type": "VARCHAR",
+          "purpose": "Customer's preferred project name"
+        },
+        "house_item_value": {
+          "type": "VARCHAR",
+          "purpose": "Value of house/fixed asset"
+        },
+        "login_number": {
+          "type": "VARCHAR",
+          "purpose": "LOI/Login number issued by bank"
+        },
+        "login_date": {
+          "type": "DATE",
+          "purpose": "Date when bank issued login number"
+        },
+        "login_amount": {
+          "type": "VARCHAR",
+          "purpose": "Amount approved at login stage"
+        },
+        "login_date_marked": {
+          "type": "DATE",
+          "purpose": "System marker when lead marked as Login"
+        },
+        "reported_login_date": {
+          "type": "DATE",
+          "purpose": "Date customer reported receiving login"
+        },
+        "reported_login_amount": {
+          "type": "VARCHAR",
+          "purpose": "Amount customer reported as approved"
+        },
+        "approval_number": {
+          "type": "VARCHAR",
+          "purpose": "Approval/Sanction number issued by bank"
+        },
+        "approval_date": {
+          "type": "DATE",
+          "purpose": "Date of sanction/approval by bank"
+        },
+        "approved_amount": {
+          "type": "VARCHAR",
+          "purpose": "Final approved loan amount"
+        },
+        "approved_emi": {
+          "type": "VARCHAR",
+          "purpose": "Approved monthly EMI"
+        },
+        "approved_roi": {
+          "type": "DECIMAL(10,2)",
+          "purpose": "Interest rate approved by bank"
+        },
+        "sanction_date_marked": {
+          "type": "DATE",
+          "purpose": "System marker when lead marked as Sanctioned"
+        },
+        "reported_sanction_date": {
+          "type": "DATE",
+          "purpose": "Date customer reported receiving sanction"
+        },
+        "reported_sanction_amount": {
+          "type": "VARCHAR",
+          "purpose": "Amount customer reported as sanctioned"
+        },
+        "disbursed_amount": {
+          "type": "VARCHAR",
+          "purpose": "Actual amount disbursed"
+        },
+        "disbursed_emi": {
+          "type": "VARCHAR",
+          "purpose": "Final EMI after disbursement"
+        },
+        "disbursed_date": {
+          "type": "DATE",
+          "purpose": "Date of disbursal"
+        },
+        "lod_applied_date": {
+          "type": "DATE",
+          "purpose": "Date when LOD applied"
+        },
+        "lod_apply": {
+          "type": "VARCHAR",
+          "purpose": "Whether LOD has been applied"
+        },
+        "expected_login_date": {
+          "type": "DATE",
+          "purpose": "Projected date for login"
+        },
+        "expected_approved_date": {
+          "type": "DATE",
+          "purpose": "Projected sanction date"
+        },
+        "expected_disbursed_date": {
+          "type": "DATE",
+          "purpose": "Projected disbursal date"
+        },
+        "is_offer": {
+          "type": "VARCHAR",
+          "purpose": "Whether an offer exists"
+        },
+        "offer_bank": {
+          "type": "INT",
+          "purpose": "Bank ID in the offer",
+          "references": "finex_bank.id"
+        },
+        "offer_loan_amount": {
+          "type": "VARCHAR",
+          "purpose": "Loan amount in offer"
+        },
+        "offer_roi": {
+          "type": "VARCHAR",
+          "purpose": "Interest rate in offer"
+        },
+        "offer_share_date": {
+          "type": "DATE",
+          "purpose": "Date when offer shared with customer"
+        },
+        "subvention_applicable": {
+          "type": "INT",
+          "purpose": "Whether subvention applicable",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "subvension_type_id": {
+          "type": "INT",
+          "purpose": "Type of subsidy/subvention",
+          "key_values": {
+            "1": "Processing Fee",
+            "2": "Login Fee",
+            "3": "Other"
+          }
+        },
+        "subvension_amount": {
+          "type": "INT",
+          "purpose": "Amount of subvention"
+        },
+        "subvention_remarks": {
+          "type": "VARCHAR",
+          "purpose": "Notes on subvention"
+        },
+        "cross_sell_type_id": {
+          "type": "INT",
+          "purpose": "Type of cross-sell product",
+          "key_values": {
+            "1": "General Insurance"
+          }
+        },
+        "cross_sell_product_amount": {
+          "type": "INT",
+          "purpose": "Premium amount for cross-sell"
+        },
+        "cibil_score": {
+          "type": "VARCHAR",
+          "purpose": "Credit score from CIBIL (range 300-900)"
+        },
+        "existing_bank_id": {
+          "type": "INT",
+          "purpose": "Existing loan bank (for BT scenarios)",
+          "references": "finex_bank.id"
+        },
+        "is_calling": {
+          "type": "VARCHAR",
+          "purpose": "Whether customer was called"
+        },
+        "call_status": {
+          "type": "VARCHAR",
+          "purpose": "Result of calling"
+        },
+        "calling_tag": {
+          "type": "VARCHAR",
+          "purpose": "Tag/categorization of call outcome"
+        },
+        "calling_reason_id": {
+          "type": "VARCHAR",
+          "purpose": "Reason code for calling outcome",
+          "references": "finex_lead_calling_reason.id"
+        },
+        "visit_date": {
+          "type": "DATE",
+          "purpose": "Date of property visit"
+        },
+        "property_agreement_value": {
+          "type": "VARCHAR",
+          "purpose": "Value in property agreement"
+        },
+        "expected_property_value": {
+          "type": "VARCHAR",
+          "purpose": "Expected post-improvement value"
+        },
+        "customer_contribution": {
+          "type": "VARCHAR",
+          "purpose": "Customer's down payment"
+        },
+        "user_paid_token_amount": {
+          "type": "INT",
+          "purpose": "Token/earnest money paid"
+        },
+        "remarks": {
+          "type": "VARCHAR",
+          "purpose": "Free-text remarks"
+        },
+        "dre_executed": {
+          "type": "INT",
+          "purpose": "DRE generated flag",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        }
+      }
+    },
+    "finex_customer": {
+      "description": "Primary applicant/borrower personal, contact, KYC, and qualification details. Created when lead transitions to login stage",
+      "category": "customer",
+      "priority": "P1-core",
+      "parent": "finex_lead",
+      "relationship": "one_to_one",
+      "fields": {
+        "id": {
+          "type": "INT",
+          "purpose": "Primary key"
+        },
+        "lead_id": {
+          "type": "INT",
+          "purpose": "FK reference to finex_lead",
+          "references": "finex_lead.id"
+        },
+        "first_name": {
+          "type": "VARCHAR",
+          "purpose": "Applicant first name"
+        },
+        "last_name": {
+          "type": "VARCHAR",
+          "purpose": "Applicant last name"
+        },
+        "full_name": {
+          "type": "VARCHAR",
+          "purpose": "Concatenated full name"
+        },
+        "salutation": {
+          "type": "VARCHAR",
+          "purpose": "Title/salutation prefix (Mr., Ms., etc.)"
+        },
+        "dob": {
+          "type": "TIMESTAMP",
+          "purpose": "Date of birth"
+        },
+        "gender": {
+          "type": "VARCHAR",
+          "purpose": "Applicant gender",
+          "key_values": {
+            "male": "Male",
+            "female": "Female"
+          }
+        },
+        "marital_status": {
+          "type": "VARCHAR",
+          "purpose": "Marital status",
+          "key_values": {
+            "single": "Single",
+            "married": "Married",
+            "live_in_partner": "Live In Partner",
+            "separated": "Separated",
+            "annulled_divorced": "Divorced",
+            "widower": "Widower"
+          }
+        },
+        "email": {
+          "type": "VARCHAR",
+          "purpose": "Primary email address",
+          "encrypted": true
+        },
+        "mobile": {
+          "type": "VARCHAR",
+          "purpose": "Primary mobile number"
+        },
+        "alt_phone": {
+          "type": "VARCHAR",
+          "purpose": "Alternate phone number",
+          "encrypted": true
+        },
+        "qualification": {
+          "type": "VARCHAR",
+          "purpose": "Educational qualification",
+          "key_values": {
+            "primary": "Primary",
+            "secondary": "Secondary",
+            "graduate": "Graduate",
+            "pg": "Post Graduate"
+          }
+        },
+        "father_name": {
+          "type": "VARCHAR",
+          "purpose": "Father's name",
+          "encrypted": true
+        },
+        "mother_name": {
+          "type": "VARCHAR",
+          "purpose": "Mother's name",
+          "encrypted": true
+        },
+        "no_of_dependent": {
+          "type": "INT",
+          "purpose": "Number of dependents"
+        },
+        "pancard_no": {
+          "type": "VARCHAR",
+          "purpose": "PAN card number",
+          "encrypted": true
+        },
+        "aadhar_no": {
+          "type": "VARCHAR",
+          "purpose": "Aadhar card number",
+          "encrypted": true
+        },
+        "pa_house_number": {
+          "type": "VARCHAR",
+          "purpose": "House number - permanent address",
+          "encrypted": true
+        },
+        "pa_street": {
+          "type": "VARCHAR",
+          "purpose": "Street name - permanent address",
+          "encrypted": true
+        },
+        "pa_state": {
+          "type": "INT",
+          "purpose": "State ID - permanent address"
+        },
+        "pa_city": {
+          "type": "INT",
+          "purpose": "City ID - permanent address"
+        },
+        "pa_pincode": {
+          "type": "VARCHAR",
+          "purpose": "Pincode - permanent address",
+          "encrypted": true
+        },
+        "pa_sameas_cra": {
+          "type": "ENUM",
+          "purpose": "Permanent address same as current residential",
+          "key_values": {
+            "Yes": "Same address",
+            "No": "Different address"
+          }
+        },
+        "cra_house_number": {
+          "type": "VARCHAR",
+          "purpose": "House number - current address",
+          "encrypted": true
+        },
+        "cra_street": {
+          "type": "VARCHAR",
+          "purpose": "Street - current address",
+          "encrypted": true
+        },
+        "cra_state": {
+          "type": "VARCHAR",
+          "purpose": "State - current address"
+        },
+        "cra_city": {
+          "type": "VARCHAR",
+          "purpose": "City - current address"
+        },
+        "cra_pincode": {
+          "type": "VARCHAR",
+          "purpose": "Pincode - current address",
+          "encrypted": true
+        },
+        "cra_address1": {
+          "type": "VARCHAR",
+          "purpose": "Primary address line - current"
+        },
+        "cra_address2": {
+          "type": "VARCHAR",
+          "purpose": "Secondary address line - current"
+        },
+        "house_type": {
+          "type": "VARCHAR",
+          "purpose": "Type of current residence",
+          "key_values": {
+            "owned": "Owned",
+            "rented": "Rented"
+          }
+        },
+        "pan_link_mobile": {
+          "type": "VARCHAR",
+          "purpose": "Mobile number linked to PAN"
+        },
+        "status": {
+          "type": "ENUM",
+          "purpose": "Record status",
+          "key_values": {
+            "0": "Deleted/Inactive",
+            "1": "Active"
+          }
+        },
+        "cibil_pdf": {
+          "type": "VARCHAR",
+          "purpose": "URL/path to CIBIL report PDF"
+        },
+        "cibil_status": {
+          "type": "INT",
+          "purpose": "CIBIL verification status code"
+        },
+        "created_date": {
+          "type": "DATETIME",
+          "purpose": "Record creation timestamp"
+        },
+        "updated_date": {
+          "type": "DATETIME",
+          "purpose": "Last record update timestamp"
+        },
+        "no_of_accounts": {
+          "type": "INT",
+          "purpose": "Number of active bank/credit accounts"
+        },
+        "business_vintage_years": {
+          "type": "INT",
+          "purpose": "Years of business operation (self-employed)"
+        },
+        "business_proof": {
+          "type": "VARCHAR",
+          "purpose": "Document identifier for business proof"
+        },
+        "industry": {
+          "type": "VARCHAR",
+          "purpose": "Industry/sector of business or employer"
+        },
+        "offer_type": {
+          "type": "VARCHAR",
+          "purpose": "Loan product type variant"
+        },
+        "existing_emi_amount": {
+          "type": "VARCHAR",
+          "purpose": "Current monthly EMI obligations"
+        },
+        "emi_ending_six_month": {
+          "type": "VARCHAR",
+          "purpose": "EMI closure timeline"
+        },
+        "is_obligation": {
+          "type": "VARCHAR",
+          "purpose": "Flag for outstanding loan obligations"
+        },
+        "dre_executed": {
+          "type": "INT",
+          "purpose": "DRE completion flag",
+          "key_values": {
+            "0": "Not executed",
+            "1": "Executed"
+          }
+        },
+        "is_whatsapp_optin": {
+          "type": "INT",
+          "purpose": "WhatsApp communication opt-in",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "is_comms_disabled": {
+          "type": "VARCHAR",
+          "purpose": "Flag to disable all communications",
+          "key_values": {
+            "0": "Enabled",
+            "1": "Disabled"
+          }
+        },
+        "whatsapp_type": {
+          "type": "VARCHAR",
+          "purpose": "WhatsApp communication type (1-way/2-way)"
+        },
+        "is_dnd": {
+          "type": "VARCHAR",
+          "purpose": "Do Not Disturb status"
+        },
+        "dnd_source": {
+          "type": "VARCHAR",
+          "purpose": "Source of DND registration"
+        },
+        "dnd_flagged_at": {
+          "type": "DATETIME",
+          "purpose": "Timestamp when DND flagged"
+        },
+        "dnd_flagged_by": {
+          "type": "VARCHAR",
+          "purpose": "User who flagged DND"
+        },
+        "is_still_interested": {
+          "type": "INT",
+          "purpose": "Customer interest flag",
+          "key_values": {
+            "0": "No",
+            "1": "Yes"
+          }
+        },
+        "language_id": {
+          "type": "INT",
+          "purpose": "Preferred language for communications"
+        },
+        "is_bulk_upload": {
+          "type": "VARCHAR",
+          "purpose": "Flag if customer added via bulk upload"
+        },
+        "whatsapp_opt_out": {
+          "type": "INT",
+          "purpose": "Customer WhatsApp opt-out flag"
+        },
+        "spouse_name": {
+          "type": "VARCHAR",
+          "purpose": "Spouse name"
+        },
+        "office_address": {
+          "type": "VARCHAR",
+          "purpose": "Office/workplace address"
+        },
+        "dependents": {
+          "type": "VARCHAR",
+          "purpose": "Details of dependents"
+        },
+        "designation": {
+          "type": "VARCHAR",
+          "purpose": "Job designation/title"
+        },
+        "occupation": {
+          "type": "VARCHAR",
+          "purpose": "Type of occupation"
+        },
+        "official_email_id": {
+          "type": "VARCHAR",
+          "purpose": "Official email address"
+        }
+      },
+      "related_tables": {
+        "finex_customer_employment": "one_to_one",
+        "finex_customer_bank_details": "one_to_many",
+        "finex_customer_reference": "one_to_many"
+      }
+    },
+    "finex_split_payment": {
+      "description": "Tranche-wise disbursement tracking. One lead can have multiple split payments for multi-tranche disbursals",
+      "category": "disbursal",
+      "priority": "P1-core",
+      "parent": "finex_lead",
+      "relationship": "one_to_many",
+      "fields": {
+        "id": {
+          "type": "INT",
+          "purpose": "Primary key"
+        },
+        "lead_id": {
+          "type": "INT",
+          "purpose": "Lead reference",
+          "references": "finex_lead.id"
+        },
+        "loan_type": {
+          "type": "INT",
+          "purpose": "Loan type"
+        },
+        "disbursed_id": {
+          "type": "VARCHAR",
+          "purpose": "Bank disbursement ID"
+        },
+        "disbursed_amount": {
+          "type": "VARCHAR",
+          "purpose": "Amount disbursed"
+        },
+        "disbursed_date": {
+          "type": "DATE",
+          "purpose": "Disbursement date"
+        },
+        "tranch_date_marked": {
+          "type": "DATE",
+          "purpose": "Date when tranche marked"
+        },
+        "disbursed_tenure": {
+          "type": "INT",
+          "purpose": "Tenure"
+        },
+        "disbursed_roi": {
+          "type": "DECIMAL",
+          "purpose": "Interest rate"
+        },
+        "status": {
+          "type": "VARCHAR",
+          "purpose": "Tranche status"
+        },
+        "is_tranch_verified": {
+          "type": "VARCHAR",
+          "purpose": "Tranche verification status",
+          "key_values": {
+            "0": "Verification Pending",
+            "1": "Verified",
+            "2": "Verification Failed"
+          }
+        },
+        "is_push_to_payout": {
+          "type": "VARCHAR",
+          "purpose": "Whether pushed to payout"
+        },
+        "is_transaction_verified": {
+          "type": "VARCHAR",
+          "purpose": "Transaction verification status",
+          "key_values": {
+            "5": "Confirmation Pending (no doc received)",
+            "0": "Verification Pending (doc received)",
+            "1": "Verified by finex",
+            "2": "Rejected by finex",
+            "3": "Failed/Reset by ETA"
+          }
+        },
+        "is_pdd_verified": {
+          "type": "VARCHAR",
+          "purpose": "PDD (Post Disbursement Document) verification",
+          "key_values": {
+            "5": "Confirmation Pending (no doc received)",
+            "0": "Verification Pending (doc received)",
+            "1": "Verified by finex",
+            "2": "Rejected by finex",
+            "3": "Failed/Reset by ETA"
+          }
+        },
+        "is_payout_verified": {
+          "type": "VARCHAR",
+          "purpose": "Payout verification status"
+        },
+        "is_pay_in_verified": {
+          "type": "VARCHAR",
+          "purpose": "Pay-in verification status"
+        },
+        "pdd_date": {
+          "type": "VARCHAR",
+          "purpose": "PDD date"
+        },
+        "pdd_status": {
+          "type": "VARCHAR",
+          "purpose": "PDD status"
+        },
+        "transaction_done": {
+          "type": "VARCHAR",
+          "purpose": "Transaction completed"
+        },
+        "transaction_mode": {
+          "type": "VARCHAR",
+          "purpose": "Transaction mode"
+        },
+        "transaction_date": {
+          "type": "VARCHAR",
+          "purpose": "Transaction date"
+        },
+        "transaction_id": {
+          "type": "VARCHAR",
+          "purpose": "Transaction ID"
+        },
+        "pay_in_done": {
+          "type": "VARCHAR",
+          "purpose": "Pay-in completed"
+        },
+        "pay_in_confirm_amount": {
+          "type": "VARCHAR",
+          "purpose": "Confirmed amount"
+        },
+        "pay_in_date": {
+          "type": "DATE",
+          "purpose": "Pay-in date"
+        },
+        "reporting_month": {
+          "type": "INT",
+          "purpose": "Reporting month"
+        },
+        "reporting_year": {
+          "type": "INT",
+          "purpose": "Reporting year"
+        },
+        "payout_date": {
+          "type": "DATE",
+          "purpose": "Payout date"
+        },
+        "vendor_id": {
+          "type": "INT",
+          "purpose": "Vendor ID"
+        },
+        "is_pdd_pendency": {
+          "type": "INT",
+          "purpose": "PDD pendency flag",
+          "key_values": {
+            "0": "No pendency",
+            "1": "Pendency"
+          }
+        },
+        "is_txn_pendency": {
+          "type": "INT",
+          "purpose": "Transaction pendency flag",
+          "key_values": {
+            "0": "No pendency",
+            "1": "Pendency"
+          }
+        },
+        "is_mis_pendency": {
+          "type": "INT",
+          "purpose": "MIS pendency flag",
+          "key_values": {
+            "0": "No pendency",
+            "1": "Pendency"
+          }
+        },
+        "is_payin_pendency": {
+          "type": "INT",
+          "purpose": "Pay-in pendency flag",
+          "key_values": {
+            "0": "No pendency",
+            "1": "Pendency"
+          }
+        }
+      },
+      "related_tables": {
+        "finex_tranche_display_eta": "one_to_one",
+        "finex_tranch_additional_details": "one_to_one",
+        "finex_lead_disburse_detail": "one_to_many"
+      }
+    },
+    "finex_customer_co_applicant": {
+      "description": "Co-applicant/co-borrower personal, contact, employment, and KYC details. One lead can have multiple co-applicants (spouse, parent, etc.). Used for joint liability assessment and additional income qualification.",
+      "category": "customer",
+      "priority": "P2-related",
+      "parent": "finex_lead",
+      "relationship": "one_to_many",
+      "fields": {
+        "id": {
+          "type": "INT",
+          "purpose": "Auto-generated primary key"
+        },
+        "lead_id": {
+          "type": "INT",
+          "purpose": "FK reference to finex_lead record",
+          "references": "finex_lead.id"
+        },
+        "relationship_with_customer": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant's relationship to primary applicant",
+          "key_values": {
+            "mother": "Mother",
+            "father": "Father",
+            "brother": "Brother",
+            "sister": "Sister",
+            "spouse": "Spouse",
+            "other": "Other",
+            "daughter": "Daughter"
+          }
+        },
+        "ca_first_name": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant first name"
+        },
+        "ca_last_name": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant last name"
+        },
+        "ca_dob": {
+          "type": "TIMESTAMP",
+          "purpose": "Co-applicant date of birth"
+        },
+        "ca_email": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant email address",
+          "encrypted": true
+        },
+        "ca_mobile": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant mobile number",
+          "encrypted": true
+        },
+        "ca_annual_income": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant annual income for qualification",
+          "encrypted": true
+        },
+        "ca_qualification": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant educational qualification"
+        },
+        "ca_father_name": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant's father name",
+          "encrypted": true
+        },
+        "ca_type": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant type classification",
+          "key_values": {
+            "financial": "Financing (liable for EMI)",
+            "non_financial": "Non-Financing (reference only)"
+          }
+        },
+        "ca_mother_name": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant's mother name",
+          "encrypted": true
+        },
+        "ca_no_of_dependent": {
+          "type": "INT",
+          "purpose": "Number of co-applicant's dependents"
+        },
+        "ca_gender": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant gender",
+          "key_values": {
+            "male": "Male",
+            "female": "Female"
+          }
+        },
+        "ca_pancard_no": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant PAN card number",
+          "encrypted": true
+        },
+        "ca_pan_linked_mobile": {
+          "type": "VARCHAR",
+          "purpose": "Mobile number linked to co-applicant PAN"
+        },
+        "ca_aadhar_no": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant Aadhar card number",
+          "encrypted": true
+        },
+        "user_id": {
+          "type": "INT",
+          "purpose": "User managing this co-applicant record"
+        },
+        "ca_pa_house_number": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant permanent address house number",
+          "encrypted": true
+        },
+        "ca_pa_street": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant permanent address street",
+          "encrypted": true
+        },
+        "ca_pa_state": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant permanent address state"
+        },
+        "ca_pa_city": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant permanent address city"
+        },
+        "ca_pa_pincode": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant permanent address pincode"
+        },
+        "ca_cra_house_number": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant current residential address house number"
+        },
+        "ca_cra_street": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant current residential address street"
+        },
+        "ca_cra_state": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant current residential address state"
+        },
+        "ca_cra_city": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant current residential address city"
+        },
+        "ca_cra_pincode": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant current residential address pincode"
+        },
+        "ca_cra_address1": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant current residential address line 1"
+        },
+        "ca_cra_address2": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant current residential address line 2"
+        },
+        "ca_house_type": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant house type (owned/rented)",
+          "key_values": {
+            "owned": "Owned",
+            "rented": "Rented"
+          }
+        },
+        "ca_pa_sameas_cra": {
+          "type": "VARCHAR",
+          "purpose": "Flag if permanent address same as current residential address"
+        },
+        "ca_duration_of_stay": {
+          "type": "VARCHAR",
+          "purpose": "Years of residence at current address",
+          "key_values": {
+            "1": "1 year",
+            "2": "2 years",
+            "3": "3 years",
+            "4": "4 years",
+            "5": "5 years",
+            ">5": "More than 5 years"
+          }
+        },
+        "ca_profession": {
+          "type": "INT",
+          "purpose": "Co-applicant profession/employment type ID"
+        },
+        "ca_salary_credit_mode": {
+          "type": "INT",
+          "purpose": "Co-applicant salary crediting method",
+          "key_values": {
+            "1": "In Account",
+            "2": "Cash",
+            "3": "Both"
+          }
+        },
+        "ca_company_name": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant employer/company name"
+        },
+        "ca_company_type": {
+          "type": "INT",
+          "purpose": "Type of company for employment classification",
+          "key_values": {
+            "1": "Proprietor",
+            "2": "Pvt Ltd",
+            "3": "LLP",
+            "4": "Partnership",
+            "5": "Public Ltd",
+            "6": "HUF"
+          }
+        },
+        "ca_tenure": {
+          "type": "INT",
+          "purpose": "Loan tenure preference in years"
+        },
+        "ca_loan_amount": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant's portion of loan amount"
+        },
+        "ca_existing_emi_amount": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant existing EMI obligations"
+        },
+        "ca_no_of_emi": {
+          "type": "INT",
+          "purpose": "Number of existing EMIs for co-applicant"
+        },
+        "ca_is_itr_filled": {
+          "type": "VARCHAR",
+          "purpose": "Flag if ITR filed (Y/N)"
+        },
+        "ca_is_form_16_filled": {
+          "type": "VARCHAR",
+          "purpose": "Flag if Form 16 filed by employer (Y/N)"
+        },
+        "ca_gross_monthly_salary": {
+          "type": "VARCHAR",
+          "purpose": "Gross monthly salary before deductions"
+        },
+        "ca_monthly_salary": {
+          "type": "VARCHAR",
+          "purpose": "Net monthly salary after deductions"
+        },
+        "ca_marital_status": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant marital status",
+          "key_values": {
+            "single": "Single",
+            "married": "Married",
+            "live_in_partner": "Live In Partner",
+            "separated": "Separated",
+            "annulled_divorced": "Divorced",
+            "widower": "Widower"
+          }
+        },
+        "ca_office_address": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant office address"
+        },
+        "ca_occupation": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant occupation type"
+        },
+        "ca_official_email_id": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant official email address"
+        },
+        "ca_spouse_name": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant spouse name"
+        },
+        "ca_designation": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant job designation"
+        },
+        "ca_total_work_experience": {
+          "type": "INT",
+          "purpose": "Total years of work experience"
+        },
+        "ca_no_of_current_job_years": {
+          "type": "INT",
+          "purpose": "Years in current job"
+        },
+        "status": {
+          "type": "ENUM",
+          "purpose": "Record status",
+          "key_values": {
+            "0": "Deleted/Inactive",
+            "1": "Active"
+          }
+        },
+        "same_as_cus_addr": {
+          "type": "ENUM",
+          "purpose": "Flag if address same as primary applicant",
+          "key_values": {
+            "0": "Different address",
+            "1": "Same address"
+          }
+        },
+        "ca_salutation": {
+          "type": "VARCHAR",
+          "purpose": "Co-applicant title/salutation"
+        },
+        "ca_business_proof": {
+          "type": "VARCHAR",
+          "purpose": "Document identifier for business proof"
+        },
+        "ca_no_of_accounts": {
+          "type": "INT",
+          "purpose": "Number of co-applicant bank accounts"
+        },
+        "ca_offer_type": {
+          "type": "VARCHAR",
+          "purpose": "Loan product offer type"
+        },
+        "ca_emi_ending_six_month": {
+          "type": "VARCHAR",
+          "purpose": "EMI closure timeline"
+        },
+        "ca_is_obligation": {
+          "type": "VARCHAR",
+          "purpose": "Flag for outstanding obligations"
+        },
+        "cibil_pdf": {
+          "type": "VARCHAR",
+          "purpose": "URL/path to co-applicant CIBIL report"
+        },
+        "cibil_status": {
+          "type": "INT",
+          "purpose": "Co-applicant CIBIL verification status"
+        },
+        "dre_executed": {
+          "type": "INT",
+          "purpose": "Document review execution flag",
+          "key_values": {
+            "0": "Not executed",
+            "1": "Executed"
+          }
+        }
+      },
+      "related_tables": {
+        "finex_co_applicant_employment": "one_to_one",
+        "finex_co_applicant_bank_details": "one_to_one"
+      }
+    }
+  },
+  "nested_relationships": {
+    "lead": {
+      "finex_lead": {
+        "finex_customer": "one_to_one",
+        "finex_customer_co_applicant": "one_to_many",
+        "finex_lead_detail": "one_to_one",
+        "finex_split_payment": "one_to_many"
+      }
+    },
+    "customer": {
+      "finex_customer": {
+        "finex_customer_employment": "one_to_one",
+        "finex_customer_bank_details": "one_to_many",
+        "finex_customer_reference": "one_to_many"
+      }
+    },
+    "co_applicant": {
+      "finex_customer_co_applicant": {
+        "finex_co_applicant_employment": "one_to_one",
+        "finex_co_applicant_bank_details": "one_to_one"
+      }
+    }
+  },
+  "ai_usage_notes": {
+    "status_based_actions": "Use status_id + sub_status_id to determine AI suggestions. status=2 + sub_status=600 = Login Underwriting",
+    "credit_workflow": "credit_status + credit_pending determines team ownership and AI suggestions",
+    "verification_bottlenecks": "is_login_verified, is_sanction_verified, is_disbursal_verified show verification delays",
+    "document_gaps": "doc_status + kyc_status identify missing docs. Key: doc_id 14=Aadhaar, 15=PAN (control kyc_status)",
+    "disbursal_tracking": "tranche_type + is_pdd_verified + is_transaction_verified for disbursal AI suggestions",
+    "pii_encrypted_fields": "finex_customer: email, mobile, alt_phone, pancard_no, aadhar_no, father_name, mother_name, pa_house_number, pa_street, pa_pincode, cra_house_number, cra_street, cra_pincode; finex_customer_co_applicant: ca_email, ca_mobile, ca_annual_income, ca_father_name, ca_mother_name, ca_pancard_no, ca_aadhar_no, ca_pa_house_number, ca_pa_street",
+    "sfa_hierarchy_ids": "rm_id, cbm_id, abm_id, sbm_id, rh_id, zh_id, nh_id, sh_id are EXTERNAL SFA IDs, NOT finex_user.id",
+    "co_applicant_joint_liability": "ca_type determines if co-applicant is financially liable (financial) or reference only (non_financial). Use ca_annual_income for joint income qualification."
+  },
+  "key_value_quick_ref": {
+    "status_id": {
+      "1": "New Lead",
+      "2": "Login",
+      "3": "Sanctioned",
+      "4": "Disbursed",
+      "5": "Lost"
+    },
+    "verification_status": {
+      "0": "Pending",
+      "1": "Verified",
+      "2": "Failed",
+      "3": "Confirmation Pending",
+      "5": "Waiting for document"
+    },
+    "credit_status": {
+      "1": "Query Raised",
+      "2": "Pending Approval",
+      "3": "Approved",
+      "8": "Special Override"
+    },
+    "loan_type": {
+      "1": "Home Loan (HL)",
+      "2": "Loan Against Property (LAP)"
+    },
+    "doc_status": {
+      "0": "Pending",
+      "1": "Uploaded",
+      "2": "Verified"
+    },
+    "kyc_status": {
+      "0": "Not Done",
+      "1": "Done"
+    },
+    "gender": {
+      "male": "Male",
+      "female": "Female"
+    },
+    "marital_status": {
+      "single": "Single",
+      "married": "Married",
+      "separated": "Separated",
+      "widower": "Widower"
+    },
+    "house_type": {
+      "owned": "Owned",
+      "rented": "Rented"
+    },
+    "profession": {
+      "1": "Salaried",
+      "2": "Business",
+      "3": "Overseas Seaman",
+      "4": "Overseas Land",
+      "5": "Allottee"
+    },
+    "followup_with": {
+      "customer": "Customer",
+      "financier": "Bank/Financier",
+      "saathi": "Saathi",
+      "ambak": "Ambak ops",
+      "yoddha": "Yoddha"
+    },
+    "relationship_with_customer": {
+      "mother": "Mother",
+      "father": "Father",
+      "brother": "Brother",
+      "sister": "Sister",
+      "spouse": "Spouse",
+      "daughter": "Daughter",
+      "other": "Other"
+    },
+    "ca_type": {
+      "financial": "Financially Liable (co-borrower)",
+      "non_financial": "Reference Only (guarantor)"
+    },
+    "ca_salary_credit_mode": {
+      "1": "In Account",
+      "2": "Cash",
+      "3": "Both"
+    },
+    "ca_company_type": {
+      "1": "Proprietor",
+      "2": "Pvt Ltd",
+      "3": "LLP",
+      "4": "Partnership",
+      "5": "Public Ltd",
+      "6": "HUF"
+    }
+  }
+}

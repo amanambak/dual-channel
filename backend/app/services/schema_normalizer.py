@@ -1,7 +1,7 @@
 import re
 
-from app.services.schema_registry import SchemaFieldSpec
-from app.services.schema_registry import get_schema_registry
+from app.services.field_registry import get_field_registry
+from app.services.field_spec import FieldSpec
 
 _TRUTHY_VALUES = {
     "1", "true", "yes", "y", "haan", "han", "ha", "confirmed", "confirm", "available",
@@ -15,10 +15,31 @@ _DIGITS_ONLY_FIELDS = {
 }
 _LOWERCASE_FIELDS = {
     "property_city", "property_state", "pa_city", "pa_state", "cra_city", "cra_state",
+    "customer_city", "customer_state",
     "property_type", "property_sub_type", "property_usage", "occupancy_status",
     "profession", "company_type", "salary_credit_mode", "house_type",
 }
-_UPPERCASE_FIELDS = {"pancard_no"}
+_PAN_FIELDS = {"pancard_no", "customer_pan", "ca_pancard_no", "coapplicant_pan"}
+_DOB_FIELDS = {"dob", "customer_dob", "ca_dob", "coapplicant_dob"}
+_AMOUNT_FIELDS = {
+    "loan_amount",
+    "remaining_loan_amount",
+    "previous_loan_amount",
+    "previous_emi_amount",
+    "existing_emi_amount",
+    "monthly_salary",
+    "gross_monthly_salary",
+    "annual_income",
+    "gross_annual_income",
+    "property_value",
+    "expected_property_value",
+    "expected_market_value",
+    "property_agreement_value",
+    "registration_value",
+    "login_amount",
+    "customer_contribution",
+}
+_UPPERCASE_FIELDS = set(_PAN_FIELDS)
 _SAFE_ALIASES = {
     "employment_type": "profession",
     "property_location": "property_city",
@@ -47,114 +68,40 @@ def normalize_field_name(field_name: str) -> str:
 
 
 def normalize_extracted_fields(raw_fields: dict[str, object]) -> dict[str, str]:
-    registry = get_schema_registry()
+    registry = get_field_registry()
     normalized: dict[str, str] = {}
 
     for raw_key, raw_value in raw_fields.items():
-        field_name = normalize_field_name(str(raw_key))
-        if field_name not in registry.fields:
+        field_name = registry.resolve(normalize_field_name(str(raw_key))) or normalize_field_name(str(raw_key))
+        definition = registry.definition(field_name)
+        if definition is None:
             continue
-        value = normalize_field_value(field_name, raw_value)
+        spec = FieldSpec(
+            name=definition.id,
+            meaning=definition.label,
+            types=tuple(definition.types or ["string"]),
+            enum_values=tuple(definition.options or ()),
+        )
+        value = _normalize_by_spec(definition.id, raw_value, spec)
         if value is not None:
-            normalized[field_name] = value
+            normalized[definition.id] = value
 
     derive_extracted_fields(normalized)
     return normalized
 
 
-def build_high_confidence_local_updates(text: str) -> dict[str, str]:
-    registry = get_schema_registry()
-    normalized_text = re.sub(r"\s+", " ", text or "").lower()
-    updates: dict[str, str] = {}
-
-    location = registry.extract_location_value(text)
-    if location:
-        updates["property_city"] = location.lower()
-
-    pincode = registry.extract_pincode_value(text)
-    if pincode:
-        updates["property_pincode"] = pincode
-
-    cibil_score = registry.extract_cibil_value(text)
-    if cibil_score:
-        updates["cibil_score"] = cibil_score
-
-    loan_amount = _extract_amount_if_explicit(
-        normalized_text,
-        text,
-        {"loan", "budget", "requirement", "needed", "need"},
-    )
-    if loan_amount:
-        updates["loan_amount"] = loan_amount
-
-    gross_monthly_salary = _extract_amount_near_terms(
-        normalized_text,
-        text,
-        {"gross", "monthly", "salary"},
-    )
-    if gross_monthly_salary:
-        updates["gross_monthly_salary"] = gross_monthly_salary
-
-    monthly_salary = _extract_amount_near_terms(
-        normalized_text,
-        text,
-        {"monthly", "salary"},
-    )
-    if monthly_salary and "gross" not in normalized_text:
-        updates["monthly_salary"] = monthly_salary
-
-    annual_income = _extract_amount_near_terms(
-        normalized_text,
-        text,
-        {"annual", "yearly", "income"},
-    )
-    if annual_income:
-        updates["annual_income"] = annual_income
-        updates["gross_annual_income"] = annual_income
-
-    if "cash" in normalized_text and "salary" in normalized_text:
-        cash_salary = _extract_amount_near_terms(
-            normalized_text,
-            text,
-            {"cash", "salary"},
-        )
-    else:
-        cash_salary = None
-    if cash_salary:
-        updates["in_hand_monthly_cash_salary"] = cash_salary
-        updates["customer_earn_cash_income"] = "yes"
-
-    emi_amount = _extract_emi_amount(normalized_text, text)
-    if emi_amount:
-        updates["existing_emi_amount"] = emi_amount
-
-    if any(token in normalized_text for token in {"salaried", "salary", "job"}):
-        updates.setdefault("profession", "salaried")
-    elif any(token in normalized_text for token in {"self-employed", "self employed", "business", "self employed"}):
-        updates.setdefault("profession", "self-employed")
-
-    property_type = _extract_property_type(normalized_text)
-    if property_type:
-        updates["property_type"] = property_type
-
-    no_of_emi = _extract_emi_count(normalized_text, text)
-    if no_of_emi:
-        updates["no_of_emi"] = no_of_emi
-        updates["existing_emi"] = "yes"
-
-    if "property" in normalized_text and (
-        "city" in normalized_text or location or pincode or property_type
-    ):
-        updates["is_property_identified"] = "yes"
-
-    derive_extracted_fields(updates)
-    return updates
-
-
 def normalize_field_value(field_name: str, raw_value: object) -> str | None:
-    registry = get_schema_registry()
-    spec = registry.get_field_spec(field_name)
-    return _normalize_by_spec(field_name, raw_value, spec)
+    field_registry = get_field_registry()
+    definition = field_registry.definition(field_name)
+    if definition:
+        spec = FieldSpec(
+            name=definition.id,
+            meaning=definition.label,
+            types=tuple(definition.types or ["string"]),
+            enum_values=tuple(definition.options or ()),
+        )
+        return _normalize_by_spec(definition.id, raw_value, spec)
+    return None
 
 
 def derive_extracted_fields(extracted_fields: dict[str, str]) -> None:
@@ -183,7 +130,7 @@ def derive_extracted_fields(extracted_fields: dict[str, str]) -> None:
         extracted_fields.setdefault("customer_earn_cash_income", "yes")
 
 
-def _normalize_by_spec(field_name: str, raw_value: object, spec: SchemaFieldSpec) -> str | None:
+def _normalize_by_spec(field_name: str, raw_value: object, spec: FieldSpec) -> str | None:
     if raw_value is None:
         return None
 
@@ -193,6 +140,15 @@ def _normalize_by_spec(field_name: str, raw_value: object, spec: SchemaFieldSpec
         candidate = str(raw_value).strip()
     if not candidate:
         return None
+
+    if field_name in _PAN_FIELDS:
+        return normalize_pan_value(candidate)
+
+    if field_name in _DOB_FIELDS:
+        return normalize_date_value(candidate) or _format_string_value(field_name, candidate)
+
+    if field_name in _AMOUNT_FIELDS:
+        return normalize_amount_value(candidate) or _normalize_number_value(candidate)
 
     enum_value = _normalize_enum_value(candidate, spec.enum_values)
     if enum_value is not None:
@@ -317,113 +273,6 @@ def _extract_numeric_token(candidate: str) -> str | None:
     return match.group(0) if match else None
 
 
-def _extract_amount_if_explicit(
-    normalized_text: str, raw_text: str, required_tokens: set[str]
-) -> str | None:
-    if not any(token in normalized_text for token in required_tokens):
-        return None
-    return _extract_amount_near_terms(normalized_text, raw_text, required_tokens)
-
-
-def _extract_amount_near_terms(
-    normalized_text: str, raw_text: str, required_tokens: set[str]
-) -> str | None:
-    if not any(token in normalized_text for token in required_tokens):
-        return None
-
-    patterns = [
-        r"(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>crore|cr|lakh|lac|lakhs|lacs|thousand|k)?\s*(?:ka|ki|ke)?\s*(?:" + "|".join(required_tokens) + r")\b",
-        r"(?:"
-        + "|".join(required_tokens)
-        + r")\b\s*(?:ka|ki|ke|is|hai|hoon|hun|hu)\s*(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>crore|cr|lakh|lac|lakhs|lacs|thousand|k)?",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, raw_text, flags=re.IGNORECASE)
-        if match:
-            number = match.group("number")
-            unit = (match.groupdict().get("unit") or "").lower()
-            try:
-                numeric_value = float(number)
-            except ValueError:
-                return None
-            if unit in {"crore", "cr"}:
-                return str(int(numeric_value * 10000000))
-            if unit in {"lakh", "lac", "lakhs", "lacs"}:
-                return str(int(numeric_value * 100000))
-            if unit in {"thousand", "k"}:
-                return str(int(numeric_value * 1000))
-            return str(int(numeric_value)) if numeric_value.is_integer() else str(numeric_value)
-    return None
-
-
-def _extract_property_type(normalized_text: str) -> str | None:
-    for token in ("flat", "plot", "villa", "apartment", "independent"):
-        if token in normalized_text:
-            return token
-    return None
-
-
-def _extract_emi_count(normalized_text: str, raw_text: str) -> str | None:
-    if "emi" not in normalized_text:
-        return None
-    amount_markers = {"amount", "outflow", "outgoing", "monthly", "total", "value", "cost"}
-    if any(marker in normalized_text for marker in amount_markers):
-        count_patterns = [
-            r"\b(?P<number>\d+)\s*(?:active\s+)?emis?\b",
-            r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+emis?\b",
-            r"\b(?:number(?:s)? of|count of)\s+emis?\s*(?:is|are|hai|hain|tha|thi|the)?\s*(?P<number>\d+)\b",
-        ]
-    else:
-        count_patterns = [
-            r"\b(?P<number>\d+)\s*(?:nos?\.?|number(?:s)? of)?\s*emis?\b",
-            r"\b(?:no\.?|number(?:s)? of|count of)\s*emis?\b\s*(?:is|are|hai|hain|tha|thi|the)\s*(?P<number>\d+)\b",
-        ]
-
-    for pattern in count_patterns:
-        match = re.search(pattern, raw_text, flags=re.IGNORECASE)
-        if match:
-            value = match.group("number")
-            if value.isdigit():
-                return str(int(value))
-            return value
-    word_count_map = {
-        "one": "1",
-        "two": "2",
-        "three": "3",
-        "four": "4",
-        "five": "5",
-        "six": "6",
-        "seven": "7",
-        "eight": "8",
-        "nine": "9",
-        "ten": "10",
-    }
-    for word, value in word_count_map.items():
-        if re.search(rf"\b{word}\s+emis?\b", normalized_text):
-            return value
-    return None
-
-
-def _extract_emi_amount(normalized_text: str, raw_text: str) -> str | None:
-    if "emi" not in normalized_text:
-        return None
-    patterns = [
-        r"(?:total\s+)?(?:monthly\s+)?(?:emi\s+outflow|monthly\s+emi)\D*(?P<number>\d[\d,]*(?:\.\d+)?)",
-        r"(?:outflow|outgoing)\D*(?P<number>\d[\d,]*(?:\.\d+)?)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, raw_text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        number = match.group("number").replace(",", "")
-        try:
-            numeric_value = float(number)
-        except ValueError:
-            continue
-        return str(int(numeric_value)) if numeric_value.is_integer() else str(numeric_value)
-    return None
-
-
 def _format_string_value(field_name: str, value: str) -> str:
     if field_name in _DIGITS_ONLY_FIELDS:
         return re.sub(r"\D+", "", value)
@@ -434,3 +283,64 @@ def _format_string_value(field_name: str, value: str) -> str:
     if field_name in {"email", "official_email_id"}:
         return value.lower()
     return value
+
+
+def normalize_pan_value(value: str) -> str | None:
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "", value or "").upper()
+    if re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", cleaned):
+        return cleaned
+    return None
+
+
+def normalize_date_value(value: str) -> str | None:
+    candidate = re.sub(r"\s+", " ", value or "").strip().lower()
+    if not candidate:
+        return None
+
+    iso = re.search(r"\b(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})\b", candidate)
+    if iso:
+        return _format_date_parts(
+            iso.group("year"), iso.group("month"), iso.group("day")
+        )
+
+    numeric = re.search(r"\b(?P<day>\d{1,2})[/-](?P<month>\d{1,2})[/-](?P<year>\d{4})\b", candidate)
+    if numeric:
+        return _format_date_parts(
+            numeric.group("year"), numeric.group("month"), numeric.group("day")
+        )
+    return None
+
+
+def normalize_amount_value(value: str) -> str | None:
+    candidate = re.sub(r"\s+", " ", str(value or "")).strip().lower().replace(",", "")
+    if not candidate:
+        return None
+
+    match = re.search(
+        r"(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>crore|cr|lakh|lac|lakhs|lacs|thousand|k)?\b",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    if match and match.group("unit"):
+        return _format_amount(float(match.group("number")), match.group("unit"))
+    return None
+
+
+def _format_date_parts(year: str, month: str, day: str) -> str | None:
+    year_int = int(year)
+    month_int = int(month)
+    day_int = int(day)
+    if not (1900 <= year_int <= 2100 and 1 <= month_int <= 12 and 1 <= day_int <= 31):
+        return None
+    return f"{year_int:04d}-{month_int:02d}-{day_int:02d}"
+
+
+def _format_amount(number: float, unit: str) -> str:
+    normalized_unit = unit.lower()
+    if normalized_unit in {"crore", "cr"}:
+        number *= 10000000
+    elif normalized_unit in {"lakh", "lac", "lakhs", "lacs"}:
+        number *= 100000
+    elif normalized_unit in {"thousand", "k"}:
+        number *= 1000
+    return str(int(number)) if number.is_integer() else str(number)

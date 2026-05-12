@@ -7,11 +7,13 @@ const CONFIG = {
   OPENAI_TRANSCRIPTION_PARAMS: {
     model: 'gpt-4o-transcribe',
     language: '',
-    prompt: 'Transcribe Indian home-loan calls accurately. Expect Hindi, English, and Hinglish. Prefer Roman-script output for Hindi/Hinglish words, keep loan and banking terms literal, and do not guess words from brief noise or cross-talk.',
+    prompt: 'Transcribe only the words clearly spoken in the audio. Expect Hindi, English, and Hinglish. For Hindi or Hinglish speech, use natural Roman-script Hinglish. Do not translate, paraphrase, correct, infer names, complete sentences, or add words that were not spoken. If audio is unclear or there is cross-talk, omit unclear words.',
+    agentPrompt: 'Transcribe only the words clearly spoken in the audio. For Hindi or Hinglish speech, use natural Roman-script Hinglish. Do not translate, paraphrase, correct, infer names, complete sentences, or add words that were not spoken. If audio is unclear, omit unclear words.',
     vad_type: 'server_vad',
-    vad_threshold: 0.6,
-    prefix_padding_ms: 80,
-    silence_duration_ms: 120
+    vad_threshold: 0.45,
+    prefix_padding_ms: 800,
+    silence_duration_ms: 700,
+    noise_reduction: 'none'
   },
 
   LLM_MODEL: 'gpt-5.4'

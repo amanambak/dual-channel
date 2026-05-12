@@ -45,9 +45,6 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `GET /api/sessions/{session_id}/summary`
   Returns session customer info:
   `{"customer_info": {...}}`
-- `POST /api/summary`
-  Ad-hoc extraction from supplied conversation text:
-  `{"customer_info": {...}}`
 - `POST /api/summary/chat`
   Generates a chat answer that recommends which extracted field(s) should be inserted into the database:
   `{"reply": "...", "customer_info": {...}}`. The prompt is built with schema context from `home_loan_schema.csv` and `customer_info.json`, and the returned `customer_info` payload is normalized for direct insertion.

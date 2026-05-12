@@ -7,19 +7,37 @@ class CaptureWorklet extends AudioWorkletProcessor {
     this.chunkSampleCount = Math.round(sampleRate * 0.025);
     this.pendingSamples = new Float32Array(this.chunkSampleCount);
     this.pendingSampleCount = 0;
+    this.port.onmessage = (event) => {
+      if (event.data?.type === 'flush') {
+        this.flushPendingSamples();
+      }
+    };
   }
 
   process(inputs, outputs, parameters) {
     const input = inputs[0];
     if (input.length > 0) {
-      // Mono conversion (taking the first channel)
-      const inputChannel = input[0];
-
-      this.enqueueMonoSamples(inputChannel);
+      this.enqueueMonoSamples(this.mixToMono(input));
     }
 
     // Returning true tells the browser to keep this processor alive
     return true;
+  }
+
+  mixToMono(input) {
+    if (input.length === 1) {
+      return input[0];
+    }
+
+    const sampleCount = input[0].length;
+    const mixed = new Float32Array(sampleCount);
+    for (let channelIndex = 0; channelIndex < input.length; channelIndex += 1) {
+      const channel = input[channelIndex];
+      for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+        mixed[sampleIndex] += channel[sampleIndex] / input.length;
+      }
+    }
+    return mixed;
   }
 
   enqueueMonoSamples(inputChannel) {
@@ -43,6 +61,18 @@ class CaptureWorklet extends AudioWorkletProcessor {
         this.pendingSampleCount = 0;
       }
     }
+  }
+
+  flushPendingSamples() {
+    if (this.pendingSampleCount <= 0) {
+      return;
+    }
+    const int16Buffer = this.float32ToInt16(
+      this.pendingSamples.subarray(0, this.pendingSampleCount)
+    );
+    this.port.postMessage(int16Buffer.buffer, [int16Buffer.buffer]);
+    this.pendingSamples = new Float32Array(this.chunkSampleCount);
+    this.pendingSampleCount = 0;
   }
 
   /**

@@ -9,7 +9,7 @@ FastAPI backend for the Chrome extension call-assist system.
 - Aggregate transcript chunks into utterances
 - Filter noise, filler, low-confidence speech, and incomplete trailing fragments
 - Generate live caller suggestions through a single LangChain-based LLM service
-- Extract schema-based customer fields using `home_loan_schema.csv` and `customer_info.json`
+- Extract customer fields using the registry built from `FIELD_MAPPING_CORE.json`
 - Serve session-backed and ad-hoc customer info summaries
 
 ## Run
@@ -26,7 +26,6 @@ FastAPI backend for the Chrome extension call-assist system.
 - `GET /health`
 - `WS /ws/session`
 - `GET /api/sessions/{session_id}/summary`
-- `POST /api/summary`
 
 ## Main Modules
 
@@ -44,8 +43,8 @@ FastAPI backend for the Chrome extension call-assist system.
   WebSocket and transcription lifecycle helpers
 - [app/services/session_text.py](app/services/session_text.py)
   Transcript normalization and call-stage heuristics
-- [app/services/schema_registry.py](/home/amanpaswan/Documents/final/backend/app/services/schema_registry.py)
-  Loads valid customer-info field names from the backend schema files
+- [app/services/field_registry.py](app/services/field_registry.py)
+  Loads canonical field names, aliases, and database paths from `FIELD_MAPPING_CORE.json`
 
 ## Documentation
 

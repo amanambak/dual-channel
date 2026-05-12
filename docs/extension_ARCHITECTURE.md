@@ -37,9 +37,7 @@ Responsibilities:
 - persists `currentSessionId` in `chrome.storage.local`
 - stores transcript and AI messages
 - starts and stops the offscreen audio bridge
-- routes summary requests to:
-  - `GET /api/sessions/{session_id}/summary`
-  - fallback `POST /api/summary`
+- routes summary requests to `GET /api/sessions/{session_id}/summary`
 
 ### 2. Offscreen Document
 

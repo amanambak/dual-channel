@@ -41,10 +41,9 @@ Exposes:
 
 - `WS /ws/session`
 - `GET /api/sessions/{session_id}/summary`
-- `POST /api/summary`
 - `POST /api/chat`
 
-The websocket endpoint creates a `SessionRuntime` per browser connection. Summary endpoints read from the live session state when it is available, otherwise the ad-hoc summary endpoint uses the same extraction service on supplied text.
+The websocket endpoint creates a `SessionRuntime` per browser connection. Summary reads from the live session state.
 The chat endpoint accepts a plain user message plus optional short chat history and returns a normal LLM reply without live transcription, utterance finalization, or schema extraction.
 
 ### 2. Session Orchestration
@@ -207,12 +206,6 @@ Returns the current session customer-info map:
   }
 }
 ```
-
-### Ad-Hoc Summary
-
-`POST /api/summary`
-
-Uses the same schema extraction service on supplied conversation text when there is no active live session.
 
 ## Known Constraints
 

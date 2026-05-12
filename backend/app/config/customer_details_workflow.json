@@ -1,0 +1,154 @@
+{
+  "id": "customer_details",
+  "label": "Customer Details",
+  "required_for": ["offer_check"],
+  "base_required_fields": [
+    "customer_first_name",
+    "customer_last_name",
+    "customer_mobile",
+    "customer_dob",
+    "customer_pan",
+    "customer_city",
+    "customer_state"
+  ],
+  "field_priority": [
+    "customer_mobile",
+    "customer_dob",
+    "customer_pan",
+    "customer_city",
+    "customer_state",
+    "customer_address_line1",
+    "customer_marital_status",
+    "customer_mother_name",
+    "customer_email"
+  ],
+  "sections": [
+    {
+      "id": "person_identity",
+      "label": "Person Identity",
+      "fields": [
+        "customer_first_name",
+        "customer_last_name",
+        "customer_gender",
+        "customer_dob",
+        "customer_mother_name",
+        "customer_marital_status",
+        "customer_qualification",
+        "customer_preferred_language"
+      ]
+    },
+    {
+      "id": "contact_kyc",
+      "label": "Contact and KYC",
+      "fields": [
+        "customer_mobile",
+        "customer_email",
+        "customer_official_email",
+        "customer_pan",
+        "customer_aadhaar"
+      ]
+    },
+    {
+      "id": "address",
+      "label": "Address",
+      "fields": [
+        "customer_pincode",
+        "customer_state",
+        "customer_city",
+        "customer_address_line1",
+        "customer_address_line2"
+      ]
+    },
+    {
+      "id": "employment_snapshot",
+      "label": "Employment Snapshot",
+      "fields": [
+        "customer_occupation",
+        "customer_designation",
+        "customer_office_address",
+        "customer_official_email",
+        "customer_company_name",
+        "customer_total_work_experience",
+        "customer_current_job_years"
+      ]
+    },
+    {
+      "id": "co_applicant",
+      "label": "Co-applicant",
+      "fields": ["has_co_applicant"]
+    }
+  ],
+  "branches": [
+    {
+      "id": "married_customer",
+      "label": "Married customer",
+      "when": {
+        "field": "customer_marital_status",
+        "operator": "equals_any",
+        "value": ["married", "1"]
+      },
+      "required_fields": ["customer_spouse_name"]
+    },
+    {
+      "id": "customer_address_incomplete",
+      "label": "Customer address incomplete",
+      "when": {
+        "field": "customer_pincode",
+        "operator": "exists"
+      },
+      "required_fields": ["customer_state", "customer_city", "customer_address_line1"]
+    },
+    {
+      "id": "salaried_or_employed_customer",
+      "label": "Salaried customer",
+      "when": {
+        "field": "customer_occupation",
+        "operator": "matches_any",
+        "value": ["salaried", "job", "employee", "service"]
+      },
+      "required_fields": [
+        "customer_company_name",
+        "customer_designation",
+        "customer_total_work_experience",
+        "customer_current_job_years",
+        "customer_official_email"
+      ]
+    },
+    {
+      "id": "co_applicant_present",
+      "label": "Co-applicant present",
+      "when": {
+        "field": "has_co_applicant",
+        "operator": "truthy"
+      },
+      "required_fields": [
+        "coapplicant_first_name",
+        "coapplicant_last_name",
+        "coapplicant_mobile",
+        "coapplicant_dob",
+        "coapplicant_pan"
+      ]
+    },
+    {
+      "id": "coapplicant_address_required",
+      "label": "Co-applicant address required",
+      "when": {
+        "all": [
+          {"field": "has_co_applicant", "operator": "truthy"},
+          {"field": "coapplicant_same_as_customer_address", "operator": "falsy"}
+        ]
+      },
+      "required_fields": [
+        "coapplicant_pincode",
+        "coapplicant_state",
+        "coapplicant_city",
+        "coapplicant_address_line1"
+      ]
+    }
+  ],
+  "completion_rule": {
+    "mode": "required_fields_and_active_branches",
+    "minimum_required_status": "filled",
+    "ignore_optional_fields": true
+  }
+}

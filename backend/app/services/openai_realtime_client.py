@@ -9,6 +9,14 @@ from websockets.exceptions import ConnectionClosed
 from app.core.config import get_settings
 
 
+AGENT_TRANSCRIPTION_PROMPT = (
+    "Transcribe only the words clearly spoken in the audio. "
+    "For Hindi or Hinglish speech, use natural Roman-script Hinglish. "
+    "Do not translate, paraphrase, correct, infer names, complete sentences, "
+    "or add any words that were not spoken. If audio is unclear, omit unclear words."
+)
+
+
 class OpenAIRealtimeTranscriptionClient:
     def __init__(self, params: dict | None = None, channel: str = "customer") -> None:
         self.settings = get_settings()
@@ -51,7 +59,7 @@ class OpenAIRealtimeTranscriptionClient:
                 or self.settings.openai_transcription_model
             )
         }
-        prompt = self.params.get("prompt") or self.settings.openai_transcription_prompt
+        prompt = self._resolve_transcription_prompt()
         language = self.params.get("language") or self.settings.openai_transcription_language
         if prompt:
             transcription["prompt"] = str(prompt)
@@ -69,17 +77,28 @@ class OpenAIRealtimeTranscriptionClient:
                                 "format": {"type": "audio/pcm", "rate": 24000},
                                 "transcription": transcription,
                                 "turn_detection": _build_turn_detection(self.params),
-                                "noise_reduction": {
-                                    "type": _resolve_noise_reduction(
-                                        self.params, self.channel
-                                    )
-                                },
+                                **_noise_reduction_config(self.params, self.channel),
                             }
                         },
                         "include": ["item.input_audio_transcription.logprobs"],
                     },
                 }
             )
+        )
+
+    def _resolve_transcription_prompt(self) -> str:
+        if self.channel == "agent":
+            return str(
+                self.params.get("agent_prompt")
+                or self.params.get("agentPrompt")
+                or AGENT_TRANSCRIPTION_PROMPT
+            )
+        return str(
+            self.params.get("customer_prompt")
+            or self.params.get("customerPrompt")
+            or self.params.get("prompt")
+            or self.settings.openai_transcription_prompt
+            or ""
         )
 
     async def send_audio(self, payload: bytes) -> bool:
@@ -148,18 +167,25 @@ def _build_turn_detection(params: dict) -> dict:
         }
     return {
         "type": "server_vad",
-        "threshold": _float_param(params, "vad_threshold", 0.6),
-        "prefix_padding_ms": _int_param(params, "prefix_padding_ms", 80),
-        "silence_duration_ms": _int_param(params, "silence_duration_ms", 120),
+        "threshold": _float_param(params, "vad_threshold", 0.45),
+        "prefix_padding_ms": _int_param(params, "prefix_padding_ms", 800),
+        "silence_duration_ms": _int_param(params, "silence_duration_ms", 700),
         "create_response": False,
         "interrupt_response": False,
     }
 
 
+def _noise_reduction_config(params: dict, channel: str) -> dict:
+    noise_reduction = _resolve_noise_reduction(params, channel)
+    if noise_reduction in {"", "none", "off", "false", "disabled"}:
+        return {}
+    return {"noise_reduction": {"type": noise_reduction}}
+
+
 def _resolve_noise_reduction(params: dict, channel: str) -> str:
     explicit = params.get("noise_reduction")
-    if explicit:
-        return str(explicit)
+    if explicit is not None:
+        return str(explicit).strip().lower()
     if channel == "customer":
-        return "far_field"
-    return "near_field"
+        return "none"
+    return "none"

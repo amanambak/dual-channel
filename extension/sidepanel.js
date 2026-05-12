@@ -9,7 +9,7 @@ const CONFIG_REF = globalThis.CONFIG || {
 let currentCard = null;
 let pendingMergeCard = null;
 let pendingMergeAt = 0;
-let pendingTranscriptFrame = null;
+let pendingTranscriptFrames = [];
 let transcriptFrameScheduled = false;
 const aiCards = new Map();
 const committedUtteranceIds = new Set();
@@ -249,9 +249,16 @@ summaryBtn.addEventListener('click', async () => {
   try {
     const summary = await new Promise((resolve) => {
       chrome.runtime.sendMessage({ type: 'GENERATE_SUMMARY' }, (response) => {
+        if (response?.error) {
+          resolve({ error: response.error });
+          return;
+        }
         resolve(response?.summary);
       });
     });
+    if (summary?.error) {
+      throw new Error(summary.error);
+    }
     displaySummary(summary);
   } catch (err) {
     alert('Failed to generate summary. Please try again.');
@@ -906,7 +913,7 @@ async function sendChatMessage(textOverride = null, options = {}) {
 const SIDEPANEL_MESSAGE_HANDLERS = {
   TRANSCRIPT_UPDATE(message) {
     if (!message.isFinal) {
-      pendingTranscriptFrame = message;
+      pendingTranscriptFrames.push(message);
       if (!transcriptFrameScheduled) {
         transcriptFrameScheduled = true;
         requestAnimationFrame(flushPendingTranscriptFrame);
@@ -958,18 +965,20 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
     renderCommittedUtterance(message);
   },
 
-  API_ERROR(message) { addErrorToContainer(message.message, message.source); },
+  API_ERROR(message) {
+    addErrorToContainer(message.message, message.source);
+  },
 };
 
 function flushPendingTranscriptFrame() {
-  if (!pendingTranscriptFrame) {
+  if (!pendingTranscriptFrames.length) {
     transcriptFrameScheduled = false;
     return;
   }
-  const message = pendingTranscriptFrame;
-  pendingTranscriptFrame = null;
+  const frames = pendingTranscriptFrames;
+  pendingTranscriptFrames = [];
   transcriptFrameScheduled = false;
-  applyTranscriptUpdate(message);
+  frames.forEach(applyTranscriptUpdate);
 }
 
 function applyTranscriptUpdate(message) {

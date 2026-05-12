@@ -7,7 +7,6 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.llm.service import LLMService
 from app.services.session_manager import SessionManager
-from app.services.schema_registry import get_schema_registry
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.lead_detail_context import build_lead_context
 from app.services.lead_detail_context import normalize_lead_detail_payload
@@ -15,12 +14,7 @@ from app.services.lead_detail_context import normalize_lead_detail_payload
 router = APIRouter()
 session_manager = SessionManager()
 llm_service = LLMService()
-schema_registry = get_schema_registry()
 logger = logging.getLogger(__name__)
-
-
-class SummaryRequest(BaseModel):
-    conversation: str
 
 
 class SummaryChatRequest(BaseModel):
@@ -113,29 +107,12 @@ async def session_summary(session_id: str) -> dict:
     return await session.generate_summary()
 
 
-@router.post("/api/summary")
-async def ad_hoc_summary(request: SummaryRequest) -> dict:
-    customer_info = await llm_service.extract_schema_values(
-        utterance=request.conversation,
-        conversation_context=request.conversation,
-        known_fields={},
-        schema_fields=schema_registry.fields,
-        schema_prompt=schema_registry.format_for_prompt(),
-    )
-    filtered = {
-        key: value for key, value in customer_info.items()
-        if key in schema_registry.fields
-    }
-    return {"customer_info": filtered}
-
-
 @router.post("/api/summary/chat")
 async def summary_chat(request: SummaryChatRequest) -> dict:
     normalized_customer_info = normalize_extracted_fields(request.customer_info)
     reply = await llm_service.generate_db_insert_question(
         customer_info=normalized_customer_info,
         conversation_context=request.conversation,
-        schema_prompt=schema_registry.format_for_prompt(),
     )
     return {"reply": reply, "customer_info": normalized_customer_info}
 

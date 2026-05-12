@@ -1,7 +1,17 @@
+import logging
+
 from langgraph.config import get_stream_writer
 
-from app.llm.service import LLMService
 from app.graph.state import TurnState
+from app.llm.service import LLMService
+from app.services.category_router import route_category as route_workflow_category
+from app.services.contextual_extraction import normalize_contextual_extracted_fields
+from app.services.field_resolver import build_resolved_field_state
+from app.services.field_resolver import resolve_extracted_fields
+from app.services.next_action import select_next_action as select_workflow_next_action
+from app.services.workflow_state import compute_workflow_state as compute_workflow
+
+logger = logging.getLogger(__name__)
 
 
 def build_turn_nodes(llm: LLMService):
@@ -14,16 +24,87 @@ def build_turn_nodes(llm: LLMService):
             utterance=state.get("utterance", ""),
             conversation_context=state.get("conversation_context", ""),
             known_fields=current_fields,
-            schema_fields=state.get("schema_fields", {}),
-            schema_prompt=state.get("schema_prompt", ""),
+            agent_last_utterance=state.get("agent_last_utterance", ""),
+            expected_field=state.get("expected_field"),
+            active_category=state.get("active_category"),
+            workflow_state=state.get("workflow_state", {}),
         )
-        if not extracted:
+        contextual_extracted = normalize_contextual_extracted_fields(
+            extracted or {},
+            expected_field=state.get("expected_field"),
+            utterance=state.get("utterance", ""),
+            agent_utterance=state.get("agent_last_utterance", ""),
+        )
+        if not contextual_extracted:
             return {}
 
-        merged_fields = {**current_fields, **extracted}
+        merged_fields = {**current_fields, **contextual_extracted}
         writer = get_stream_writer()
-        writer({"type": "schema_extracted", "fields": extracted})
-        return {"known_fields": merged_fields, "extracted_fields": extracted}
+        writer({"type": "schema_extracted", "fields": contextual_extracted})
+        return {"known_fields": merged_fields, "extracted_fields": contextual_extracted}
+
+    async def route_category(state: TurnState) -> dict:
+        known_fields = dict(state.get("known_fields", {}))
+        field_state = build_resolved_field_state(
+            existing=state.get("field_state", {}),
+            lead_detail=state.get("lead_detail", {}),
+            lead_facts=state.get("lead_facts", {}),
+            extracted_fields=known_fields,
+        )
+        current_extracted = resolve_extracted_fields(state.get("extracted_fields", {}))
+        route = route_workflow_category(
+            utterance=state.get("utterance", ""),
+            extracted_fields=current_extracted,
+            field_state=field_state,
+            previous_category=state.get("active_category"),
+            agent_last_utterance=state.get("agent_last_utterance", ""),
+            workflow_state=state.get("workflow_state", {}),
+        )
+        route_payload = route.to_dict()
+        route_payload["previous_category"] = state.get("active_category")
+
+        if route.needs_llm:
+            try:
+                classified = await llm.classify_category(
+                    utterance=state.get("utterance", ""),
+                    categories=route_payload.get("scores", {}),
+                    deterministic_route=route_payload,
+                    model_name=state.get("model_override"),
+                )
+            except Exception as exc:
+                logger.warning("Category classifier fallback failed: %s", exc)
+                classified = {}
+            category = classified.get("category")
+            if isinstance(category, str) and category in route_payload.get("scores", {}):
+                route_payload = {
+                    **route_payload,
+                    "category": category,
+                    "confidence": float(classified.get("confidence") or route_payload["confidence"]),
+                    "reason": str(classified.get("reason") or route_payload["reason"]),
+                    "llm_fallback_used": True,
+                }
+
+        return {"field_state": field_state, "category_route": route_payload}
+
+    async def compute_workflow_state(state: TurnState) -> dict:
+        route = state.get("category_route", {})
+        active_category = route.get("category") or state.get("active_category")
+        workflow_state = compute_workflow(
+            state.get("field_state", {}),
+            active_category=active_category,
+        )
+        return {
+            "active_category": active_category,
+            "workflow_state": workflow_state,
+        }
+
+    async def select_next_action(state: TurnState) -> dict:
+        action = select_workflow_next_action(
+            state.get("workflow_state", {}),
+            state.get("category_route", {}),
+            state.get("last_next_action") or {},
+        )
+        return {"next_action": action}
 
     async def generate_response(state: TurnState) -> dict:
         if not state.get("should_trigger"):
@@ -61,6 +142,9 @@ def build_turn_nodes(llm: LLMService):
             known_entities=state.get("known_fields", {}),
             last_suggestion=state.get("last_suggestion", ""),
             priority_missing_fields=state.get("lead_priority_missing_fields", []),
+            next_action=state.get("next_action", {}),
+            workflow_state=state.get("workflow_state", {}),
+            active_category=state.get("active_category"),
         ):
             full_text += chunk
             if not started_streaming:
@@ -97,5 +181,8 @@ def build_turn_nodes(llm: LLMService):
 
     return {
         "extract_schema": extract_schema,
+        "route_category": route_category,
+        "compute_workflow_state": compute_workflow_state,
+        "select_next_action": select_next_action,
         "generate_response": generate_response,
     }

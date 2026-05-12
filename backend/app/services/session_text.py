@@ -1,5 +1,3 @@
-import re
-import time
 from dataclasses import dataclass
 
 from app.models.session import SessionState
@@ -26,54 +24,15 @@ def get_average_confidence(values: list[float]) -> float:
 
 
 def looks_like_noise_or_filler(normalized: str) -> bool:
-    filler_only = {
-        "hmm",
-        "hmmm",
-        "uh",
-        "umm",
-        "um",
-        "ji",
-        "haan",
-        "han",
-        "hello",
-        "helo",
-        "hi",
-        "ok",
-        "okay",
-        "acha",
-        "achha",
-        "accha",
-        "bolo",
-        "boliye",
-    }
-    tokens = normalized.split()
-    if not tokens:
-        return True
-    if normalized in filler_only:
-        return True
-    if set(tokens).issubset(filler_only):
-        return True
-    if len(tokens) >= 4 and len(set(tokens)) == 1:
-        return True
+    return False
+
+
+def looks_like_transcription_instruction_leak(text: str) -> bool:
     return False
 
 
 def should_capture_final_segment(transcript: str, confidence: float | None) -> bool:
-    normalized = normalize_text(transcript)
-    if not normalized or len(normalized) <= 2:
-        return False
-    if looks_like_noise_or_filler(normalized):
-        return False
-    if confidence is not None and normalize_confidence(confidence) < 0.45:
-        return False
-    return True
-
-
-def should_extract_schema_fields(utterance: str, average_confidence: float) -> bool:
-    normalized = normalize_text(utterance)
-    if not normalized or average_confidence < 0.6:
-        return False
-    return len(normalized.split()) >= 4 or any(char.isdigit() for char in utterance)
+    return bool(str(transcript or "").strip())
 
 
 def should_run_llm_extraction(
@@ -84,45 +43,13 @@ def should_run_llm_extraction(
     if speaker == "1":
         return False
 
-    normalized = normalize_text(utterance)
-    if not normalized or len(normalized) < 2:
-        return False
-    if looks_like_noise_or_filler(normalized):
-        return False
-    if average_confidence < 0.45:
-        return False
-    return True
+    return bool(str(utterance or "").strip())
 
 
 def should_invoke_llm(
     utterance: str, average_confidence: float, last_llm_invoked_at: float, cooldown: float
 ) -> bool:
-    if not utterance or len(utterance.strip()) < 2:
-        return False
-
-    normalized = normalize_text(utterance)
-    if not normalized or len(normalized) < 2:
-        return False
-
-    now = time.monotonic()
-    if now - last_llm_invoked_at < cooldown:
-        return False
-
-    tokens = normalized.split()
-    if len(tokens) < 2:
-        return False
-
-    if len(tokens) == 1 and normalized in {
-        "hello",
-        "hi",
-        "namaste",
-        "sir",
-        "ok",
-        "hmm",
-    }:
-        return False
-
-    return True
+    return bool(str(utterance or "").strip())
 
 
 def decide_turn_action(
@@ -132,11 +59,8 @@ def decide_turn_action(
     last_llm_invoked_at: float,
     cooldown: float,
 ) -> TurnActionDecision:
-    normalized = normalize_text(utterance)
-    if not normalized or len(normalized) < 2:
+    if not str(utterance or "").strip():
         return TurnActionDecision(False, False, "empty_or_too_short")
-    if looks_like_noise_or_filler(normalized):
-        return TurnActionDecision(False, False, "noise_or_filler")
 
     if speaker == "1":
         return TurnActionDecision(False, False, "agent_context_only")
@@ -193,47 +117,6 @@ def build_recent_conversation_context(
                 role = "Agent"
         lines.append(f"{role}: {msg.text}")
     return "\n".join(lines) if lines else "No prior conversation context available."
-
-
-def build_fallback_summary(utterance: str) -> str:
-    cleaned = re.sub(r"\s+", " ", utterance).strip()
-    if len(cleaned) > 120:
-        cleaned = f"{cleaned[:117].rstrip()}..."
-    return cleaned or "Current customer discussion"
-
-
-def convert_summary_to_hinglish(summary: str) -> str:
-    replacements = [
-        ("customer is concerned about", "customer ko concern hai about"),
-        ("customer confirms", "customer confirm kar raha hai"),
-        ("customer is asking about", "customer pooch raha hai about"),
-        ("customer is discussing", "customer discuss kar raha hai"),
-        ("customer wants", "customer chah raha hai"),
-        ("customer requested", "customer ne request ki hai"),
-        ("customer mentioned", "customer ne mention kiya hai"),
-        ("loan sanction", "loan sanction"),
-        ("upfront fee", "upfront fee"),
-        ("property paper check", "property paper check"),
-        ("property papers", "property papers"),
-        ("rate of interest", "rate of interest"),
-        ("fee waiver", "fee waiver"),
-        ("current status", "current status"),
-        ("next action", "next action"),
-        ("and is concerned about", "aur concern hai about"),
-        ("and wants", "aur chah raha hai"),
-    ]
-
-    updated = summary
-    for source, target in replacements:
-        updated = re.sub(source, target, updated, flags=re.IGNORECASE)
-
-    if updated == summary:
-        updated = re.sub(r"^\s*customer\s+", "", updated, flags=re.IGNORECASE).strip()
-        updated = re.sub(r"^\s*customer\b", "", updated, flags=re.IGNORECASE).strip(
-            " :-"
-        )
-
-    return updated
 
 
 def detect_call_stage(utterance: str, state: SessionState) -> str:

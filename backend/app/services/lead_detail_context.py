@@ -138,11 +138,7 @@ def normalize_lead_detail_payload(lead_detail: Any) -> dict[str, Any] | None:
 def _normalize_fact_payload(lead_facts: Any) -> dict[str, Any] | None:
     if not isinstance(lead_facts, dict):
         return None
-    return {
-        str(key): value
-        for key, value in lead_facts.items()
-        if value not in (None, "")
-    }
+    return {str(key): value for key, value in lead_facts.items()}
 
 
 OFFER_PATH_ALIASES = {
@@ -486,13 +482,18 @@ def _maybe_grouped_direct_answer(message: str, lead_detail: dict[str, Any]) -> s
         last_name = _first_value(lead_detail, ["customer.last_name"])
         full_name = " ".join(str(part).strip() for part in (first_name, last_name) if part)
         if "customer" in tokens or "applicant" in tokens:
-            if full_name:
-                return _format_direct_answer([("Customer name", full_name)])
+            rows = [
+                ("First name", first_name),
+                ("Last name", last_name),
+            ]
+            answer = _format_direct_answer(rows)
+            if answer:
+                return answer
             return "Customer name loaded lead data mein available nahi hai."
         if "lead" in tokens:
             return "Lead name loaded lead data mein available nahi hai."
 
-    if "status" in tokens and not (tokens & {"document", "documents", "doc", "docs", "dre"}):
+    if "status" in tokens and not (tokens & {"document", "documents", "doc", "docs", "dre", "marital"}):
         rows = [
             ("Status", _first_value(lead_detail, ["status_info.statuslang.status_name"])),
             ("Substatus", _first_value(lead_detail, ["sub_status_info.substatuslang.sub_status_name"])),
@@ -506,6 +507,11 @@ def _maybe_grouped_direct_answer(message: str, lead_detail: dict[str, Any]) -> s
         bank_name = _first_value(lead_detail, ["lead_details.bank.banklang.bank_name"])
         if bank_name:
             return _format_direct_answer([("Bank name", bank_name)])
+
+    if "bank" in tokens and ("details" in tokens or "detail" in tokens):
+        answer = _execute_section(lead_detail, "lead_details.bank")
+        if answer:
+            return answer
 
     if "rm" in tokens and "mobile" in tokens:
         rm_mobile = _first_value(lead_detail, ["rmdetails.mobile"])
@@ -743,15 +749,25 @@ def _execute_section(lead_detail: dict[str, Any], section_path: Any) -> str:
         return ""
 
     rows: list[tuple[str, Any]] = []
+    seen_rows: set[tuple[str, str]] = set()
     for path, value in iter_leaf_entries(lead_detail, include_blank=True):
         if path == prefix:
-            rows.append((path, value))
+            row = (path, value)
+            key = (row[0], _format_value(row[1]))
+            if key not in seen_rows:
+                seen_rows.add(key)
+                rows.append(row)
             continue
         if not path.startswith(f"{prefix}."):
             continue
         if path.endswith(".__typename") or path.endswith("__typename"):
             continue
-        rows.append((path[len(prefix) + 1 :], value))
+        row = (path[len(prefix) + 1 :], value)
+        key = (row[0], _format_value(row[1]))
+        if key in seen_rows:
+            continue
+        seen_rows.add(key)
+        rows.append(row)
 
     if not rows:
         return ""
@@ -1458,6 +1474,7 @@ def _document_buckets(
     docs = []
     docs.extend(_collect_doc_items(lead_dre_documents))
     docs.extend(_collect_doc_items((lead_detail or {}).get("customer", {}).get("recommended_docs")))
+    docs.extend(_collect_flat_recommended_docs(lead_detail or {}))
 
     by_key: dict[str, dict[str, Any]] = {}
     for name in uploaded_from_shape:
@@ -1484,8 +1501,25 @@ def _document_buckets(
     return uploaded, missing
 
 
+def _collect_flat_recommended_docs(lead_detail: dict[str, Any]) -> list[dict[str, Any]]:
+    doc_groups: dict[str, dict[str, Any]] = {}
+    for path, value in iter_leaf_entries(lead_detail, include_blank=True):
+        if "recommended_docs" not in path and "leaddocs" not in path:
+            continue
+        match = re.match(r"(.+?\[\d+\])\.(.+)$", path)
+        if not match:
+            continue
+        group_key, field_name = match.groups()
+        doc_groups.setdefault(group_key, {})[field_name] = value
+    return list(doc_groups.values())
+
+
 def _format_doc_list(values: list[str]) -> str:
     return ", ".join(values) if values else "None"
+
+
+def _normalize_doc_list_label(value: str) -> str:
+    return re.sub(r"^document\s+", "doc ", str(value).strip(), flags=re.IGNORECASE)
 
 
 def _normalize_document_status_list(values: Any) -> list[str]:
@@ -1579,8 +1613,12 @@ def build_lead_context(
 ) -> dict[str, Any]:
     normalized_lead_detail = normalize_lead_detail_payload(lead_detail)
     fallback_facts = _normalize_fact_payload(lead_facts)
-    facts_source: dict[str, Any] | None = normalized_lead_detail or fallback_facts
-    facts = dict(iter_leaf_entries(facts_source or {}))
+    facts_source: dict[str, Any] = {}
+    if fallback_facts:
+        facts_source.update(fallback_facts)
+    if normalized_lead_detail:
+        facts_source.update(normalized_lead_detail)
+    facts = dict(iter_leaf_entries(facts_source or {}, include_blank=True))
     effective_lead_id = (
         lead_id
         or (normalized_lead_detail or {}).get("id")
@@ -1591,7 +1629,7 @@ def build_lead_context(
     )
     dre_status = _effective_dre_status(facts_source or {})
     document_status = _document_status_dict(
-        lead_detail=normalized_lead_detail or fallback_facts,
+        lead_detail=facts_source or normalized_lead_detail or fallback_facts,
         lead_dre_documents=lead_dre_documents,
         lead_document_status=lead_document_status,
     )
@@ -1716,7 +1754,11 @@ def find_direct_dre_document_answer(
     asks_missing = bool(tokens & {"missing", "pending"})
     asks_uploaded = bool(tokens & {"uploaded", "upload"})
     if asks_missing and not asks_uploaded:
-        return f"Missing documents: {_format_doc_list(missing)}"
+        if not missing:
+            return "Missing documents: None"
+        return "Missing documents:\n" + "\n".join(
+            f"- {_normalize_doc_list_label(value)}" for value in missing
+        )
     if asks_uploaded and not asks_missing:
         return f"Uploaded documents: {_format_doc_list(uploaded)}"
 
@@ -1748,14 +1790,17 @@ def find_direct_lead_detail_answer(
     }
 
     best_match: tuple[int, str, Any] | None = None
-    for path, value in iter_leaf_entries(lead_detail):
+    for path, value in iter_leaf_entries(lead_detail, include_blank=True):
         if "name" in message_tokens and _is_noisy_generic_name_path(path):
             continue
         aliases = _path_aliases(path)
         score = 0
         for alias in aliases:
             alias_tokens = set(alias.split())
-            if alias and alias in normalized_message:
+            if alias and (
+                (" " in alias and alias in normalized_message)
+                or (" " not in alias and alias in message_tokens)
+            ):
                 score = max(score, 100 + len(alias_tokens))
             elif alias_tokens and alias_tokens.issubset(message_tokens):
                 score = max(score, 80 + len(alias_tokens))
@@ -1770,7 +1815,7 @@ def find_direct_lead_detail_answer(
         return ""
 
     _, path, value = best_match
-    return _format_direct_answer([(_format_label(path), value)])
+    return f"{_format_label(path)}: {_format_value(value)}"
 
 
 def _doc_group_label(group: dict[str, Any], fallback: str) -> str:

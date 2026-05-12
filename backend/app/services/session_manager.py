@@ -6,13 +6,10 @@ from fastapi import WebSocket
 
 from app.graph.service import TurnGraphService
 from app.models.session import SessionState
-from app.services.schema_registry import get_schema_registry
 from app.services.session_finalize import finalize_utterance as finalize_utterance_helper
 from app.services.session_text import (
-    build_fallback_summary,
     build_known_fields_text,
     build_recent_conversation_context,
-    convert_summary_to_hinglish,
     decide_turn_action,
     detect_call_stage,
     get_average_confidence,
@@ -35,7 +32,6 @@ class SessionRuntime:
         self.state = SessionState(session_id=self.session_id)
         self.transcription_clients = {}
         self.turn_graph = TurnGraphService()
-        self.schema_registry = get_schema_registry()
         self.transcription_tasks: dict[str, asyncio.Task] = {}
         self.transcription_keepalive_tasks: dict[str, asyncio.Task] = {}
         self.transcription_send_tasks: dict[str, asyncio.Task] = {}
@@ -75,12 +71,6 @@ class SessionRuntime:
     def build_known_fields_text(self, limit: int = 8) -> str:
         return build_known_fields_text(self.state.extracted_fields, limit=limit)
 
-    def build_fallback_summary(self, utterance: str) -> str:
-        return build_fallback_summary(utterance)
-
-    def convert_summary_to_hinglish(self, summary: str) -> str:
-        return convert_summary_to_hinglish(summary)
-
     def detect_call_stage(self, utterance: str, speaker: str | None) -> str:
         return detect_call_stage(utterance, self.state)
 
@@ -104,17 +94,6 @@ class SessionRuntime:
             self.last_llm_invoked_at,
             self.min_llm_interval_seconds,
         )
-
-    def should_extract_schema_fields(
-        self, utterance: str, average_confidence: float
-    ) -> bool:
-        return decide_turn_action(
-            utterance,
-            average_confidence,
-            "0",
-            self.last_llm_invoked_at,
-            self.min_llm_interval_seconds,
-        ).run_extraction
 
     def should_capture_final_segment(
         self, transcript: str, confidence: float | None
@@ -180,8 +159,6 @@ class SessionRuntime:
             utterance=utterance,
             utterance_id=utterance_id,
             speaker=speaker,
-            schema_prompt=self.schema_registry.format_for_prompt(),
-            schema_fields=self.schema_registry.fields,
             model_override=self.model_override,
             should_extract=should_extract,
             should_trigger=should_trigger,

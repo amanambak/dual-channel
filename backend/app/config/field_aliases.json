@@ -1,0 +1,164 @@
+{
+  "loan_type": {
+    "label": "Loan Type",
+    "category_hint": "loan_requirement",
+    "keys": ["loan_type", "lead_details.loan_type"],
+    "aliases": ["loan type", "home loan", "balance transfer", "bt", "top up", "lap"]
+  },
+  "loan_amount": {
+    "label": "Loan Amount",
+    "category_hint": "loan_requirement",
+    "keys": ["loan_amount", "lead_details.loan_amount", "loan_details.loan_amount"],
+    "aliases": ["loan amount", "requirement amount", "requested loan"]
+  },
+  "is_property_decided": {
+    "label": "Property Decided",
+    "category_hint": "loan_requirement",
+    "keys": ["is_property_decided", "is_property_identified", "lead_details.is_property_decided", "lead_details.is_property_identified", "property_details.is_property_identified"],
+    "aliases": ["property decided", "property identified", "property final"]
+  },
+  "previous_loan_amount": {
+    "label": "Previous Loan Amount",
+    "category_hint": "loan_requirement",
+    "keys": ["previous_loan_amount", "prev_loan_amount", "lead_details.prev_loan_amount", "loan_details.previous_loan_amount"],
+    "aliases": ["previous loan amount", "old loan amount", "existing loan amount", "bt loan amount"]
+  },
+  "previous_emi_amount": {
+    "label": "Previous EMI Amount",
+    "category_hint": "loan_requirement",
+    "keys": ["previous_emi_amount", "prev_emi_amount", "existing_emi_amount", "monthly_emi", "lead_details.prev_emi_amount", "obligations.existing_emi_amount"],
+    "aliases": ["previous emi", "old emi", "existing emi", "monthly emi", "bt emi"]
+  },
+  "previous_loan_start_date": {
+    "label": "Previous Loan Start Date",
+    "category_hint": "loan_requirement",
+    "keys": ["previous_loan_start_date", "prev_loan_start_date", "lead_details.prev_loan_start_date"],
+    "aliases": ["previous loan start date", "old loan start date", "bt start date"]
+  },
+  "previous_tenure": {
+    "label": "Previous Tenure",
+    "category_hint": "loan_requirement",
+    "keys": ["previous_tenure", "prev_tenure", "lead_details.prev_tenure"],
+    "aliases": ["previous tenure", "old tenure", "bt tenure"]
+  },
+  "previous_current_roi": {
+    "label": "Previous Current ROI",
+    "category_hint": "loan_requirement",
+    "keys": ["previous_current_roi", "prev_current_roi", "lead_details.prev_current_roi"],
+    "aliases": ["previous roi", "current roi", "old loan roi", "bt roi"]
+  },
+  "remaining_loan_amount": {
+    "label": "Remaining Loan Amount",
+    "category_hint": "loan_requirement",
+    "keys": ["remaining_loan_amount", "lead_details.remaining_loan_amount"],
+    "aliases": ["remaining loan", "outstanding loan", "bt outstanding"]
+  },
+  "profession": {
+    "label": "Profession",
+    "category_hint": "income_details",
+    "keys": ["profession", "lead_details.profession", "employment_details.profession"],
+    "aliases": ["profession", "employment type", "salaried", "self employed", "business"]
+  },
+  "monthly_salary": {
+    "label": "Monthly Salary",
+    "category_hint": "income_details",
+    "keys": ["monthly_salary", "lead_details.monthly_salary", "income_details.monthly_salary"],
+    "aliases": ["monthly salary", "salary", "in hand salary"]
+  },
+  "gross_monthly_salary": {
+    "label": "Gross Monthly Salary",
+    "category_hint": "income_details",
+    "keys": ["gross_monthly_salary", "income_details.gross_monthly_salary"],
+    "aliases": ["gross salary", "gross monthly salary"]
+  },
+  "income_calculation_mode": {
+    "label": "Income Calculation Mode",
+    "category_hint": "income_details",
+    "keys": ["income_calculation_mode", "lead_details.income_calculation_mode"],
+    "aliases": ["income calculation", "income mode", "business income mode"]
+  },
+  "cibil_score": {
+    "label": "CIBIL Score",
+    "category_hint": "offer_check",
+    "keys": ["cibil_score", "lead_details.cibil_score", "credit_details.cibil_score"],
+    "aliases": ["cibil", "credit score"]
+  },
+  "is_property_identified": {
+    "label": "Property Identified",
+    "category_hint": "property_details",
+    "keys": ["is_property_identified", "property_details.is_property_identified", "lead_details.is_property_identified", "lead_details.is_property_decided"],
+    "aliases": ["property identified", "property decided", "flat final"]
+  },
+  "property_city": {
+    "label": "Property City",
+    "category_hint": "property_details",
+    "keys": ["property_city", "property_details.property_city", "lead_details.property_city"],
+    "aliases": ["property city", "city", "flat city"]
+  },
+  "property_state": {
+    "label": "Property State",
+    "category_hint": "property_details",
+    "keys": ["property_state", "property_details.property_state", "lead_details.property_state"],
+    "aliases": ["property state"]
+  },
+  "expected_market_value": {
+    "label": "Expected Market Value",
+    "category_hint": "property_details",
+    "keys": ["expected_market_value", "expected_property_value", "property_value", "property_details.expected_market_value", "lead_details.expected_market_value", "lead_details.expected_property_value"],
+    "aliases": ["market value", "property value", "expected value"]
+  },
+  "registration_value": {
+    "label": "Registration Value",
+    "category_hint": "property_details",
+    "keys": ["registration_value", "property_agreement_value", "property_details.registration_value", "lead_details.registration_value"],
+    "aliases": ["registration value", "agreement value"]
+  },
+  "property_type": {
+    "label": "Property Type",
+    "category_hint": "property_details",
+    "keys": ["property_type", "property_details.property_type", "lead_details.property_type"],
+    "aliases": ["property type", "flat", "plot", "villa"]
+  },
+  "property_sub_type": {
+    "label": "Property Sub Type",
+    "category_hint": "property_details",
+    "keys": ["property_sub_type", "property_details.property_sub_type", "lead_details.property_sub_type"],
+    "aliases": ["property sub type"]
+  },
+  "agreement_type": {
+    "label": "Agreement Type",
+    "category_hint": "property_details",
+    "keys": ["agreement_type", "property_details.agreement_type", "lead_details.agreement_type"],
+    "aliases": ["agreement type"]
+  },
+  "builder_id": {
+    "label": "Builder",
+    "category_hint": "property_details",
+    "keys": ["builder_id", "builder_name_id", "property_details.builder_id", "property_details.builder_name_id", "lead_details.builder_id"],
+    "aliases": ["builder", "developer", "builder name"]
+  },
+  "project_id": {
+    "label": "Project",
+    "category_hint": "property_details",
+    "keys": ["project_id", "project_name", "preferred_project_name", "property_details.project_id", "property_details.project_name", "lead_details.project_id"],
+    "aliases": ["project", "project name"]
+  },
+  "check_oc_cc": {
+    "label": "OC/CC Check",
+    "category_hint": "property_details",
+    "keys": ["check_oc_cc", "property_details.check_oc_cc", "lead_details.check_oc_cc"],
+    "aliases": ["oc cc", "occupancy certificate", "completion certificate"]
+  },
+  "ready_for_registration": {
+    "label": "Ready For Registration",
+    "category_hint": "property_details",
+    "keys": ["ready_for_registration", "property_details.ready_for_registration", "lead_details.ready_for_registration"],
+    "aliases": ["ready for registration", "registration ready"]
+  },
+  "fulfillment_type": {
+    "label": "Fulfillment Type",
+    "category_hint": "fulfillment",
+    "keys": ["fulfillment_type", "lead_details.fulfillment_type"],
+    "aliases": ["fulfillment", "process type", "next process"]
+  }
+}

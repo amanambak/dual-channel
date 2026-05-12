@@ -177,35 +177,15 @@ function handleClearMessages(message, sender, sendResponse) {
 }
 
 function handleGenerateSummary(message, sender, sendResponse) {
-  getMessages().then(async (messages) => {
-    const conversation = messages.map((msg) => {
-      const speaker = msg.type === 'user' ? 'Customer' : 'Caller Assist';
-      return `${speaker}: ${msg.text}`;
-    }).join('\n\n');
-
+  getMessages().then(async () => {
     const sessionId = await getCurrentSessionId();
-    if (!conversation.trim() && !sessionId) {
-      sendResponse({ summary: { summary: 'Abhi tak conversation data available nahin hai.' } });
+    if (!sessionId) {
+      sendResponse({ error: 'No active session is available for summary generation.' });
       return;
     }
 
-    const sessionUrl = sessionId
-      ? `${CONFIG.BACKEND_HTTP_URL}/api/sessions/${sessionId}/summary`
-      : `${CONFIG.BACKEND_HTTP_URL}/api/summary`;
-
-    const requestInit = sessionId
-      ? { method: 'GET' }
-      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation }) };
-
     try {
-      let response = await fetch(sessionUrl, requestInit);
-      if (!response.ok && sessionId) {
-        response = await fetch(`${CONFIG.BACKEND_HTTP_URL}/api/summary`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversation })
-        });
-      }
+      const response = await fetch(`${CONFIG.BACKEND_HTTP_URL}/api/sessions/${sessionId}/summary`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }

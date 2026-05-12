@@ -7,8 +7,6 @@ class TurnState(TypedDict, total=False):
     utterance: str
     speaker: str | None
     conversation_context: str
-    schema_prompt: str
-    schema_fields: dict[str, str]
     known_fields: dict[str, str]
     should_extract: bool
     should_trigger: bool
@@ -18,6 +16,14 @@ class TurnState(TypedDict, total=False):
     context_summary: str
     last_suggestion: str  # last AI suggestion sent — model must not repeat it
     lead_priority_missing_fields: list[dict]
+    lead_detail: dict
+    lead_facts: dict
+    field_state: dict
+    active_category: str | None
+    category_route: dict
+    workflow_state: dict
+    next_action: dict
+    last_next_action: dict
+    expected_field: str | None
     extracted_fields: dict[str, str]
     raw_response: str
-

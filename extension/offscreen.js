@@ -12,6 +12,10 @@ let workletAgent = null;
 let backendSocket;
 let currentSessionId = null;
 let isAgentMicPaused = false;
+let backendSessionReady = false;
+let queuedAudioFrames = [];
+
+const MAX_QUEUED_AUDIO_FRAMES = 800;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'START_CAPTURE' && message.offscreen) {
@@ -63,9 +67,9 @@ async function startCapture(streamId, captureMode = 'gmeet') {
       try {
         micStream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
           }
         });
         micSource = audioContext.createMediaStreamSource(micStream);
@@ -88,8 +92,9 @@ async function startCapture(streamId, captureMode = 'gmeet') {
       }
     }
 
-    await openBackendConnection(captureMode, hasMicChannel);
+    const backendConnection = openBackendConnection(captureMode, hasMicChannel);
     await setupDualChannelWorklets(tabGain, hasMicChannel ? micGain : null);
+    await backendConnection;
 
   } catch (err) {
     chrome.runtime.sendMessage({
@@ -108,14 +113,47 @@ async function startCapture(streamId, captureMode = 'gmeet') {
  * @param {ArrayBuffer} audioBuffer - 25 ms mono Int16 PCM payload
  */
 function sendChannelFrame(channelByte, audioBuffer, shouldSkip = () => false) {
-  if (shouldSkip() || !backendSocket || backendSocket.readyState !== WebSocket.OPEN) {
+  if (shouldSkip()) {
+    return false;
+  }
+  if (!backendSocket || backendSocket.readyState !== WebSocket.OPEN || !backendSessionReady) {
+    queueAudioFrame(channelByte, audioBuffer);
+    return true;
+  }
+  return sendPreparedChannelFrame(channelByte, audioBuffer);
+}
+
+function queueAudioFrame(channelByte, audioBuffer) {
+  if (!audioBuffer?.byteLength) {
     return;
   }
+  queuedAudioFrames.push({
+    channelByte,
+    audioBuffer: audioBuffer.slice(0)
+  });
+  if (queuedAudioFrames.length > MAX_QUEUED_AUDIO_FRAMES) {
+    queuedAudioFrames.splice(0, queuedAudioFrames.length - MAX_QUEUED_AUDIO_FRAMES);
+  }
+}
+
+function flushQueuedAudioFrames() {
+  if (!backendSocket || backendSocket.readyState !== WebSocket.OPEN || !backendSessionReady) {
+    return;
+  }
+  const frames = queuedAudioFrames;
+  queuedAudioFrames = [];
+  for (const frame of frames) {
+    sendPreparedChannelFrame(frame.channelByte, frame.audioBuffer);
+  }
+}
+
+function sendPreparedChannelFrame(channelByte, audioBuffer) {
   const channelBuffer = new ArrayBuffer(audioBuffer.byteLength + 1);
   const view = new Uint8Array(channelBuffer);
   view[0] = channelByte;
   view.set(new Uint8Array(audioBuffer), 1);
   backendSocket.send(channelBuffer);
+  return true;
 }
 
 async function setupDualChannelWorklets(tabGain, micGain) {
@@ -152,6 +190,7 @@ function setAgentMicPaused(paused) {
 
 async function stopCapture() {
   isAgentMicPaused = false;
+  flushWorkletBuffers();
   if (backendSocket) {
     try {
       if (backendSocket.readyState === WebSocket.OPEN) {
@@ -164,6 +203,8 @@ async function stopCapture() {
   }
 
   currentSessionId = null;
+  backendSessionReady = false;
+  queuedAudioFrames = [];
 
   // Disconnect tab audio nodes
   if (workletCustomer) {
@@ -204,6 +245,15 @@ async function stopCapture() {
   }
 }
 
+function flushWorkletBuffers() {
+  for (const node of [workletCustomer, workletAgent]) {
+    try {
+      node?.port?.postMessage({ type: 'flush' });
+    } catch (err) {
+    }
+  }
+}
+
 function sendLeadContextToBackend(context = {}) {
   if (!backendSocket || backendSocket.readyState !== WebSocket.OPEN) {
     return;
@@ -231,6 +281,8 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
     socket.binaryType = 'arraybuffer';
 
     let opened = false;
+    backendSessionReady = false;
+    queuedAudioFrames = [];
 
     socket.onopen = () => {
       const params = { ...(CONFIG.OPENAI_TRANSCRIPTION_PARAMS || {}) };
@@ -275,6 +327,8 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
       if (backendSocket === socket) {
         backendSocket = null;
       }
+      backendSessionReady = false;
+      queuedAudioFrames = [];
 
       if (event.code !== 1000 && event.code !== 1005) {
         chrome.runtime.sendMessage({
@@ -292,6 +346,8 @@ function openBackendConnection(captureMode = 'gmeet', hasMicChannel = false) {
 function handleBackendMessage(message) {
   if (message.type === 'session_started') {
     currentSessionId = message.sessionId || null;
+    backendSessionReady = true;
+    flushQueuedAudioFrames();
     chrome.runtime.sendMessage({
       type: 'SESSION_READY',
       sessionId: currentSessionId

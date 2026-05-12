@@ -6,14 +6,24 @@ from fastapi import WebSocketDisconnect
 
 from app.models.events import ErrorEvent
 from app.models.events import TranscriptEvent
+from app.services.field_resolver import build_resolved_field_state
 from app.services.lead_detail_context import build_priority_missing_fields
 from app.services.openai_realtime_client import OpenAIRealtimeTranscriptionClient
-from app.services.session_text import (
-    normalize_confidence,
-    should_capture_final_segment,
-)
+from app.services.session_text import normalize_confidence
 
 logger = logging.getLogger(__name__)
+
+OPENAI_AUDIO_QUEUE_FRAMES = 240
+
+
+def should_send_transcript_update(
+    transcript: str,
+    *,
+    is_final: bool,
+    speaker: str,
+    confidence: float | None,
+) -> bool:
+    return bool(str(transcript or "").strip())
 
 
 async def run(session) -> None:
@@ -57,10 +67,18 @@ def update_lead_context(session, data: dict) -> None:
 
     if lead_id is not None:
         session.state.lead_id = str(lead_id)
+    session.state.lead_detail = lead_detail if isinstance(lead_detail, dict) else {}
+    session.state.lead_facts = lead_facts if isinstance(lead_facts, dict) else {}
     session.state.lead_missing_fields = lead_missing_fields if isinstance(lead_missing_fields, list) else []
     session.state.lead_priority_missing_fields = build_priority_missing_fields(
         lead_detail if isinstance(lead_detail, dict) else {},
         session.state.lead_missing_fields,
+    )
+    session.state.resolved_field_state = build_resolved_field_state(
+        existing=session.state.resolved_field_state,
+        lead_detail=session.state.lead_detail,
+        lead_facts=session.state.lead_facts,
+        extracted_fields=session.state.extracted_fields,
     )
     logger.info(
         "Session lead context updated: session_id=%s lead_id=%s missing=%d priority_missing=%d",
@@ -101,7 +119,7 @@ async def handle_text_message(session, raw_message: str) -> None:
             client = OpenAIRealtimeTranscriptionClient(params, channel=ch)
             await client.connect()
             session.transcription_clients[ch] = client
-            session.transcription_send_queues[ch] = asyncio.Queue(maxsize=20)
+            session.transcription_send_queues[ch] = asyncio.Queue(maxsize=OPENAI_AUDIO_QUEUE_FRAMES)
             session.transcription_send_tasks[ch] = asyncio.create_task(send_transcription(session, ch))
             session.transcription_tasks[ch] = asyncio.create_task(read_transcription(session, ch))
             session.transcription_keepalive_tasks[ch] = asyncio.create_task(
@@ -143,16 +161,19 @@ async def send_transcription(session, channel: str) -> None:
     try:
         while not session.closed and channel in session.transcription_clients:
             audio_data = await send_queue.get()
-            if not await transcriber.send_audio(audio_data):
-                logger.warning("OpenAI transcription channel %s closed while sending audio", channel)
-                session.transcription_clients.pop(channel, None)
-                task = session.transcription_tasks.pop(channel, None)
-                if task:
-                    task.cancel()
-                keepalive_task = session.transcription_keepalive_tasks.pop(channel, None)
-                if keepalive_task:
-                    keepalive_task.cancel()
-                break
+            try:
+                if not await transcriber.send_audio(audio_data):
+                    logger.warning("OpenAI transcription channel %s closed while sending audio", channel)
+                    session.transcription_clients.pop(channel, None)
+                    task = session.transcription_tasks.pop(channel, None)
+                    if task:
+                        task.cancel()
+                    keepalive_task = session.transcription_keepalive_tasks.pop(channel, None)
+                    if keepalive_task:
+                        keepalive_task.cancel()
+                    break
+            finally:
+                send_queue.task_done()
     except asyncio.CancelledError:
         return
     except Exception as exc:
@@ -229,6 +250,15 @@ async def handle_transcription_message(session, data: dict) -> None:
     }
 
     if transcript:
+        confidence = metadata["confidence"]
+        if not should_send_transcript_update(
+            transcript,
+            is_final=is_final,
+            speaker=speaker,
+            confidence=confidence,
+        ):
+            return
+
         session._cancel_finalize_task()
         await session.send_model(
             TranscriptEvent(
@@ -240,29 +270,19 @@ async def handle_transcription_message(session, data: dict) -> None:
         )
 
         if is_final and transcript.strip():
-            confidence = metadata["confidence"]
-            if should_capture_final_segment(transcript.strip(), confidence):
-                if (
-                    session.state.current_segments
-                    and session.state.current_segments[0][1] != speaker
-                ):
-                    session.finalized_segments = True
-                    session._cancel_finalize_task()
-                    await session.finalize_utterance()
-                session.state.current_segments.append((transcript.strip(), speaker))
-                session.current_segment_confidences.append(
-                    normalize_confidence(confidence)
-                )
+            if (
+                session.state.current_segments
+                and session.state.current_segments[0][1] != speaker
+            ):
                 session.finalized_segments = True
-                session._schedule_finalize()
-            else:
-                logger.info(
-                    "Dropping final transcript: channel=%s speaker=%s text=%r confidence=%s",
-                    channel_id,
-                    speaker,
-                    transcript.strip(),
-                    confidence,
-                )
+                session._cancel_finalize_task()
+                await session.finalize_utterance()
+            session.state.current_segments.append((transcript.strip(), speaker))
+            session.current_segment_confidences.append(
+                normalize_confidence(confidence)
+            )
+            session.finalized_segments = True
+            session._schedule_finalize()
 
         if metadata["speech_final"] and session.state.current_segments:
             session._schedule_finalize()

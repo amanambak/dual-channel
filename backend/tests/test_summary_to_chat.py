@@ -49,8 +49,7 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
                 kwargs["customer_info"],
                 {"loan_amount": "2000000", "cibil_score": "760"},
             )
-            self.assertIn("loan_amount", kwargs["schema_prompt"])
-            self.assertIn("cibil_score", kwargs["schema_prompt"])
+            self.assertNotIn("schema_prompt", kwargs)
 
     def test_db_insert_prompt_asks_for_an_answer(self):
         from app.llm.service import build_db_insert_question_prompt
@@ -64,6 +63,54 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Answer which extracted canonical field(s) should be inserted into the database now.", prompt)
         self.assertIn("Do not ask a question.", prompt)
         self.assertNotIn("Ask exactly one concise question", prompt)
+
+    def test_stream_reply_prompt_keeps_suggestion_to_selected_action_question(self):
+        from app.llm.service import build_stream_reply_prompt
+
+        prompt = build_stream_reply_prompt(
+            utterance="haan main vikas bol raha hoon",
+            conversation_context="Agent: kya meri baat vikas se ho rahi hai?\nCustomer: haan main vikas bol raha hoon",
+            customer_last_utterance="haan main vikas bol raha hoon",
+            agent_last_utterance="kya meri baat vikas se ho rahi hai?",
+            context_summary="Opening greeting",
+            known_entities={"customer_first_name": "Vikas"},
+            next_action={
+                "type": "ask_field",
+                "category": "customer_details",
+                "field": "customer_last_name",
+                "question": "Sir last name confirm kar dijiye.",
+            },
+            workflow_state={},
+            active_category="customer_details",
+        )
+
+        self.assertIn("ask for that same field", prompt)
+        self.assertIn("Do not add agent self-introduction", prompt)
+        self.assertIn('"field": "customer_last_name"', prompt)
+
+    def test_stream_reply_prompt_clarifies_city_when_state_was_captured(self):
+        from app.llm.service import build_stream_reply_prompt
+
+        prompt = build_stream_reply_prompt(
+            utterance="Madhya Pradesh",
+            conversation_context="Agent: current city kya hai?\nCustomer: Madhya Pradesh",
+            customer_last_utterance="Madhya Pradesh",
+            agent_last_utterance="current city kya hai?",
+            context_summary="Customer gave state while city is still missing",
+            known_entities={"cra_state": "madhya pradesh"},
+            next_action={
+                "type": "ask_field",
+                "category": "customer_details",
+                "field": "customer_city",
+                "question": "Sir current city confirm kar dijiye.",
+            },
+            workflow_state={},
+            active_category="customer_details",
+        )
+
+        self.assertIn("state is noted and ask for current city again", prompt)
+        self.assertIn("wrong address part", prompt)
+        self.assertIn('"field": "customer_city"', prompt)
 
     def test_lead_query_plan_prompt_prefers_only_requested_fields(self):
         from app.llm.service import build_lead_query_plan_prompt

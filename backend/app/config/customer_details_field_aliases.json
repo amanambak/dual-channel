@@ -1,0 +1,261 @@
+{
+  "customer_first_name": {
+    "label": "First Name",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.first_name", "customer_details.first_name"],
+    "realtime_keys": ["first_name", "customer_first_name"],
+    "aliases": ["first name", "customer name", "naam"]
+  },
+  "customer_last_name": {
+    "label": "Last Name",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.last_name", "customer_details.last_name"],
+    "realtime_keys": ["last_name", "customer_last_name"],
+    "aliases": ["last name", "surname"]
+  },
+  "customer_gender": {
+    "label": "Gender",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.gender", "customer_details.gender"],
+    "realtime_keys": ["gender", "customer_gender"],
+    "aliases": ["gender"]
+  },
+  "customer_dob": {
+    "label": "DOB",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.dob", "customer_details.dob", "kyc_details.dob"],
+    "realtime_keys": ["dob", "customer_dob"],
+    "aliases": ["dob", "date of birth", "birth date"]
+  },
+  "customer_mobile": {
+    "label": "Mobile Number",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.mobile", "contact_details.mobile", "contact_details.customer_mobile"],
+    "realtime_keys": ["mobile", "customer_mobile", "phone_number"],
+    "aliases": ["mobile", "phone", "customer phone", "contact number"]
+  },
+  "customer_email": {
+    "label": "Email",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.email", "contact_details.email"],
+    "realtime_keys": ["email", "customer_email"],
+    "aliases": ["email", "personal email"]
+  },
+  "customer_official_email": {
+    "label": "Official Email",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.official_email", "contact_details.official_email_id"],
+    "realtime_keys": ["official_email_id", "official_email", "customer_official_email"],
+    "aliases": ["official email", "work email", "office email"]
+  },
+  "customer_pan": {
+    "label": "PAN No.",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.pancard_no", "kyc_details.pancard_no"],
+    "realtime_keys": ["pancard_no", "pan_number", "customer_pan"],
+    "aliases": ["pan", "pan card", "pancard"]
+  },
+  "customer_aadhaar": {
+    "label": "Aadhaar Number",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.aadhar_no", "kyc_details.aadhar_no"],
+    "realtime_keys": ["aadhar_no", "aadhaar_no", "customer_aadhaar"],
+    "aliases": ["aadhaar", "aadhar", "aadhaar number"]
+  },
+  "customer_marital_status": {
+    "label": "Marital Status",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.marital_status", "customer_details.marital_status"],
+    "realtime_keys": ["marital_status", "customer_marital_status"],
+    "aliases": ["marital status", "married", "single"]
+  },
+  "customer_spouse_name": {
+    "label": "Spouse Name",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.spouse_name", "customer_details.spouse_name"],
+    "realtime_keys": ["spouse_name", "customer_spouse_name"],
+    "aliases": ["spouse name", "wife name", "husband name"]
+  },
+  "customer_mother_name": {
+    "label": "Mother Name",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.mother_name", "customer_details.mother_name"],
+    "realtime_keys": ["mother_name", "customer_mother_name"],
+    "aliases": ["mother name", "mother's name"]
+  },
+  "customer_qualification": {
+    "label": "Qualification",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.qualification", "customer_details.qualification"],
+    "realtime_keys": ["qualification", "customer_qualification"],
+    "aliases": ["qualification", "education"]
+  },
+  "customer_preferred_language": {
+    "label": "Preferred Language",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.preferred_language", "customer_details.preferred_language"],
+    "realtime_keys": ["preferred_language", "customer_preferred_language"],
+    "aliases": ["preferred language", "language"]
+  },
+  "customer_pincode": {
+    "label": "Pin Code",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.pincode", "current_address.cra_pincode", "residence_details.cra_pincode"],
+    "realtime_keys": ["pincode", "cra_pincode", "customer_pincode"],
+    "aliases": ["pin code", "pincode", "postal code"]
+  },
+  "customer_state": {
+    "label": "State",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.state", "current_address.cra_state", "residence_details.cra_state"],
+    "realtime_keys": ["state", "cra_state", "customer_state"],
+    "aliases": ["state", "rajya"]
+  },
+  "customer_city": {
+    "label": "City",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.city", "current_address.cra_city", "residence_details.cra_city"],
+    "realtime_keys": ["city", "cra_city", "customer_city"],
+    "aliases": ["city", "shehar"]
+  },
+  "customer_address_line1": {
+    "label": "Address Line 1",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.address_line1", "current_address.cra_address1", "residence_details.cra_address1"],
+    "realtime_keys": ["address_line1", "cra_address1", "customer_address_line1"],
+    "aliases": ["address", "address line 1", "current address"]
+  },
+  "customer_address_line2": {
+    "label": "Address Line 2",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.address_line2", "current_address.cra_address2", "residence_details.cra_address2"],
+    "realtime_keys": ["address_line2", "cra_address2", "customer_address_line2"],
+    "aliases": ["address line 2"]
+  },
+  "customer_occupation": {
+    "label": "Occupation",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.occupation", "employment_details.occupation"],
+    "realtime_keys": ["occupation", "customer_occupation"],
+    "aliases": ["occupation", "profession"]
+  },
+  "customer_designation": {
+    "label": "Designation",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.designation", "employment_details.designation"],
+    "realtime_keys": ["designation", "customer_designation"],
+    "aliases": ["designation", "job title"]
+  },
+  "customer_office_address": {
+    "label": "Office Address",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.office_address", "employment_details.office_address", "employment_details.company_address"],
+    "realtime_keys": ["office_address", "company_address", "customer_office_address"],
+    "aliases": ["office address", "company address"]
+  },
+  "customer_company_name": {
+    "label": "Company Name",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.company_name", "employment_details.company_name"],
+    "realtime_keys": ["company_name", "customer_company_name"],
+    "aliases": ["company", "company name", "employer"]
+  },
+  "customer_total_work_experience": {
+    "label": "Total Work Experience",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.work_experience", "employment_details.work_experience"],
+    "realtime_keys": ["work_experience", "customer_total_work_experience"],
+    "aliases": ["work experience", "total experience"]
+  },
+  "customer_current_job_years": {
+    "label": "Current Job Years",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.time_in_current_co", "employment_details.time_in_current_co"],
+    "realtime_keys": ["time_in_current_co", "customer_current_job_years"],
+    "aliases": ["current company years", "current job years"]
+  },
+  "customer_dependents": {
+    "label": "Dependents",
+    "category_hint": "customer_details",
+    "graphql_paths": ["customer.dependents", "residence_details.dependents", "residence_details.no_of_dependent"],
+    "realtime_keys": ["dependents", "no_of_dependent", "customer_dependents"],
+    "aliases": ["dependents", "family dependents"]
+  },
+  "has_co_applicant": {
+    "label": "Has Co-applicant",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.has_co_applicant", "coapplicant.has_co_applicant"],
+    "realtime_keys": ["has_co_applicant", "co_applicant"],
+    "aliases": ["co applicant", "co-applicant", "joint applicant"]
+  },
+  "coapplicant_first_name": {
+    "label": "Co-applicant First Name",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.first_name", "coapplicant.first_name"],
+    "realtime_keys": ["coapplicant_first_name", "co_applicant_first_name"],
+    "aliases": ["co applicant first name"]
+  },
+  "coapplicant_last_name": {
+    "label": "Co-applicant Last Name",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.last_name", "coapplicant.last_name"],
+    "realtime_keys": ["coapplicant_last_name", "co_applicant_last_name"],
+    "aliases": ["co applicant last name"]
+  },
+  "coapplicant_mobile": {
+    "label": "Co-applicant Mobile",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.mobile", "coapplicant.mobile"],
+    "realtime_keys": ["coapplicant_mobile", "co_applicant_mobile"],
+    "aliases": ["co applicant mobile", "co applicant phone"]
+  },
+  "coapplicant_dob": {
+    "label": "Co-applicant DOB",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.dob", "coapplicant.dob"],
+    "realtime_keys": ["coapplicant_dob", "co_applicant_dob"],
+    "aliases": ["co applicant dob"]
+  },
+  "coapplicant_pan": {
+    "label": "Co-applicant PAN",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.pancard_no", "coapplicant.pancard_no"],
+    "realtime_keys": ["coapplicant_pan", "co_applicant_pan"],
+    "aliases": ["co applicant pan", "co applicant pancard"]
+  },
+  "coapplicant_same_as_customer_address": {
+    "label": "Co-applicant Same Address",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.same_as_customer_address", "coapplicant.same_as_customer_address"],
+    "realtime_keys": ["coapplicant_same_as_customer_address", "co_applicant_same_address"],
+    "aliases": ["co applicant same address", "same as customer address"]
+  },
+  "coapplicant_pincode": {
+    "label": "Co-applicant Pin Code",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.pincode", "coapplicant.pincode"],
+    "realtime_keys": ["coapplicant_pincode", "co_applicant_pincode"],
+    "aliases": ["co applicant pincode"]
+  },
+  "coapplicant_state": {
+    "label": "Co-applicant State",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.state", "coapplicant.state"],
+    "realtime_keys": ["coapplicant_state", "co_applicant_state"],
+    "aliases": ["co applicant state"]
+  },
+  "coapplicant_city": {
+    "label": "Co-applicant City",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.city", "coapplicant.city"],
+    "realtime_keys": ["coapplicant_city", "co_applicant_city"],
+    "aliases": ["co applicant city"]
+  },
+  "coapplicant_address_line1": {
+    "label": "Co-applicant Address Line 1",
+    "category_hint": "customer_details",
+    "graphql_paths": ["co_applicant.address_line1", "coapplicant.address_line1"],
+    "realtime_keys": ["coapplicant_address_line1", "co_applicant_address_line1"],
+    "aliases": ["co applicant address"]
+  }
+}
