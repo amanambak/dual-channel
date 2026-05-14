@@ -20,7 +20,7 @@ class ContextualExtractionTest(unittest.TestCase):
             expected_field="customer_pan",
         )
 
-        self.assertEqual(fields, {"pancard_no": "ABCDE1234F"})
+        self.assertEqual(fields, {"customer_pan": "ABCDE1234F"})
 
     def test_accepts_llm_normalized_iso_dob(self):
         fields = normalize_contextual_extracted_fields(
@@ -28,7 +28,7 @@ class ContextualExtractionTest(unittest.TestCase):
             expected_field="customer_dob",
         )
 
-        self.assertEqual(fields, {"dob": "2000-07-07"})
+        self.assertEqual(fields, {"customer_dob": "2000-07-07"})
 
     def test_canonical_customer_fields_are_in_extraction_schema(self):
         specs = build_extraction_field_specs({})
@@ -42,7 +42,7 @@ class ContextualExtractionTest(unittest.TestCase):
             expected_field="customer_pan",
         )
 
-        self.assertEqual(fields, {"pancard_no": "GGWPA4092F"})
+        self.assertEqual(fields, {"customer_pan": "GGWPA4092F"})
 
     def test_core_mapping_field_normalizes_without_csv_entry(self):
         fields = normalize_contextual_extracted_fields(
@@ -75,7 +75,7 @@ class ContextualExtractionTest(unittest.TestCase):
             expected_field="customer_city",
         )
 
-        self.assertEqual(fields, {"cra_city": "noida"})
+        self.assertEqual(fields, {"customer_city": "noida"})
 
     def test_city_question_accepts_state_without_forcing_it_into_city(self):
         fields = normalize_contextual_extracted_fields(
@@ -83,7 +83,7 @@ class ContextualExtractionTest(unittest.TestCase):
             expected_field="customer_city",
         )
 
-        self.assertEqual(fields, {"cra_state": "madhya pradesh"})
+        self.assertEqual(fields, {"customer_state": "madhya pradesh"})
 
     def test_later_city_state_correction_updates_even_when_next_action_is_stale(self):
         fields = normalize_contextual_extracted_fields(
@@ -93,7 +93,7 @@ class ContextualExtractionTest(unittest.TestCase):
 
         self.assertEqual(
             fields,
-            {"cra_city": "noida", "cra_state": "uttar pradesh"},
+            {"customer_city": "noida", "customer_state": "uttar pradesh"},
         )
 
     def test_accepts_expected_mobile(self):
@@ -102,7 +102,7 @@ class ContextualExtractionTest(unittest.TestCase):
             expected_field="customer_mobile",
         )
 
-        self.assertEqual(fields, {"mobile": "8085234483"})
+        self.assertEqual(fields, {"customer_mobile": "8085234483"})
 
     def test_agent_loan_amount_question_extracts_hindi_amount_answer(self):
         fields = normalize_contextual_extracted_fields(
@@ -122,7 +122,7 @@ class ContextualExtractionTest(unittest.TestCase):
             agent_utterance="सर DOB बता दीजिए.",
         )
 
-        self.assertEqual(fields, {"dob": "2000-05-06"})
+        self.assertEqual(fields, {"customer_dob": "2000-05-06"})
 
     def test_agent_pan_question_extracts_spoken_hindi_pan(self):
         fields = normalize_contextual_extracted_fields(
@@ -132,7 +132,7 @@ class ContextualExtractionTest(unittest.TestCase):
             agent_utterance="सर आपका पेन कार्ड नंबर क्या है?",
         )
 
-        self.assertEqual(fields, {"pancard_no": "GGWWP4012M"})
+        self.assertEqual(fields, {"customer_pan": "GGWWP4012M"})
 
     def test_suggested_last_name_does_not_turn_random_customer_word_into_name(self):
         fields = normalize_contextual_extracted_fields(
@@ -152,7 +152,7 @@ class ContextualExtractionTest(unittest.TestCase):
             agent_utterance="Hello, kya meri baat Aman se ho rahi hai?",
         )
 
-        self.assertEqual(fields, {"first_name": "Aman"})
+        self.assertEqual(fields, {"customer_first_name": "Aman"})
 
 
 if __name__ == "__main__":

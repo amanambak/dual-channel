@@ -9,37 +9,6 @@ _TRUTHY_VALUES = {
 _FALSY_VALUES = {
     "0", "false", "no", "n", "nahi", "nahi", "nahin", "not", "none",
 }
-_DIGITS_ONLY_FIELDS = {
-    "mobile", "customer_mobile", "pan_link_mobile", "alt_phone",
-    "aadhar_no", "property_pincode", "pa_pincode", "cra_pincode",
-}
-_LOWERCASE_FIELDS = {
-    "property_city", "property_state", "pa_city", "pa_state", "cra_city", "cra_state",
-    "customer_city", "customer_state",
-    "property_type", "property_sub_type", "property_usage", "occupancy_status",
-    "profession", "company_type", "salary_credit_mode", "house_type",
-}
-_PAN_FIELDS = {"pancard_no", "customer_pan", "ca_pancard_no", "coapplicant_pan"}
-_DOB_FIELDS = {"dob", "customer_dob", "ca_dob", "coapplicant_dob"}
-_AMOUNT_FIELDS = {
-    "loan_amount",
-    "remaining_loan_amount",
-    "previous_loan_amount",
-    "previous_emi_amount",
-    "existing_emi_amount",
-    "monthly_salary",
-    "gross_monthly_salary",
-    "annual_income",
-    "gross_annual_income",
-    "property_value",
-    "expected_property_value",
-    "expected_market_value",
-    "property_agreement_value",
-    "registration_value",
-    "login_amount",
-    "customer_contribution",
-}
-_UPPERCASE_FIELDS = set(_PAN_FIELDS)
 _SAFE_ALIASES = {
     "employment_type": "profession",
     "property_location": "property_city",
@@ -48,12 +17,6 @@ _SAFE_ALIASES = {
     "emi_amount": "existing_emi_amount",
     "emi_outflow": "existing_emi_amount",
     "monthly_emi_outflow": "existing_emi_amount",
-}
-_PROPERTY_DETAIL_FIELDS = {
-    "property_value", "expected_property_value", "property_agreement_value",
-    "property_type", "property_sub_type", "property_pincode", "property_city",
-    "property_state", "property_address1", "property_address2", "project_name",
-    "preferred_project_name", "builder_name_id",
 }
 _OBLIGATION_DETAIL_FIELDS = {
     "existing_emi_amount", "no_of_emi", "emi_ending_six_month",
@@ -105,7 +68,13 @@ def normalize_field_value(field_name: str, raw_value: object) -> str | None:
 
 
 def derive_extracted_fields(extracted_fields: dict[str, str]) -> None:
-    has_property_detail = any(extracted_fields.get(field) for field in _PROPERTY_DETAIL_FIELDS)
+    registry = get_field_registry()
+    has_property_detail = any(
+        value
+        and registry.category_hint(field) == "property_details"
+        and field != "is_property_identified"
+        for field, value in extracted_fields.items()
+    )
     if has_property_detail and "is_property_identified" not in extracted_fields:
         extracted_fields["is_property_identified"] = "yes"
 
@@ -141,13 +110,13 @@ def _normalize_by_spec(field_name: str, raw_value: object, spec: FieldSpec) -> s
     if not candidate:
         return None
 
-    if field_name in _PAN_FIELDS:
+    if _is_pan_field(field_name):
         return normalize_pan_value(candidate)
 
-    if field_name in _DOB_FIELDS:
+    if _is_dob_field(field_name):
         return normalize_date_value(candidate) or _format_string_value(field_name, candidate)
 
-    if field_name in _AMOUNT_FIELDS:
+    if _is_amount_field(field_name):
         return normalize_amount_value(candidate) or _normalize_number_value(candidate)
 
     enum_value = _normalize_enum_value(candidate, spec.enum_values)
@@ -170,7 +139,7 @@ def _normalize_by_spec(field_name: str, raw_value: object, spec: FieldSpec) -> s
         if number_value is not None:
             return number_value
 
-    if field_name in _DIGITS_ONLY_FIELDS:
+    if _is_digits_only_field(field_name):
         digits_only = re.sub(r"\D+", "", candidate)
         return digits_only or None
 
@@ -274,15 +243,67 @@ def _extract_numeric_token(candidate: str) -> str | None:
 
 
 def _format_string_value(field_name: str, value: str) -> str:
-    if field_name in _DIGITS_ONLY_FIELDS:
+    if _is_digits_only_field(field_name):
         return re.sub(r"\D+", "", value)
-    if field_name in _UPPERCASE_FIELDS:
+    if _is_pan_field(field_name):
         return value.replace(" ", "").upper()
-    if field_name in _LOWERCASE_FIELDS:
+    if _should_lowercase_field(field_name):
         return value.lower()
     if field_name in {"email", "official_email_id"}:
         return value.lower()
     return value
+
+
+def _is_pan_field(field_name: str) -> bool:
+    normalized = field_name.lower()
+    return "pan" in normalized and "link" not in normalized
+
+
+def _is_dob_field(field_name: str) -> bool:
+    normalized = field_name.lower()
+    return normalized == "dob" or normalized.endswith("_dob")
+
+
+def _is_amount_field(field_name: str) -> bool:
+    normalized = field_name.lower()
+    return any(
+        token in normalized
+        for token in (
+            "amount",
+            "salary",
+            "income",
+            "value",
+            "contribution",
+            "roi",
+        )
+    )
+
+
+def _is_digits_only_field(field_name: str) -> bool:
+    normalized = field_name.lower()
+    return any(
+        token in normalized
+        for token in ("mobile", "phone", "pincode", "aadhaar", "aadhar", "pan_link")
+    )
+
+
+def _should_lowercase_field(field_name: str) -> bool:
+    normalized = field_name.lower()
+    return any(
+        token in normalized
+        for token in (
+            "city",
+            "state",
+            "status",
+            "qualification",
+            "relationship",
+            "type",
+            "usage",
+            "profession",
+            "mode",
+            "occupation",
+        )
+    )
 
 
 def normalize_pan_value(value: str) -> str | None:

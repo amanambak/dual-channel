@@ -25,6 +25,8 @@ class RAGService:
         self.recursive_chunker = self._init_recursive_chunker()
         self.bm25: Optional[BM25Okapi] = None
         self.bm25_docs: List[Document] = []
+        self._total_chunks_cache: int | None = None
+        self._hybrid_cache: dict[tuple[str, int], List[Document]] = {}
         self._refresh_bm25()
 
     def _init_embeddings(self) -> GoogleGenerativeAIEmbeddings:
@@ -76,17 +78,22 @@ class RAGService:
             
             if not docs:
                 logger.info("No documents found in ChromaDB. BM25 index not initialized.")
+                self._total_chunks_cache = 0
                 return
 
             self.bm25_docs = docs
             tokenized_corpus = [self._tokenize(doc.page_content) for doc in docs]
             self.bm25 = BM25Okapi(tokenized_corpus)
+            self._total_chunks_cache = len(docs)
+            self._hybrid_cache.clear()
             logger.info(f"BM25 index built with {len(docs)} documents.")
         except Exception as e:
             logger.error(f"Failed to refresh BM25 index: {e}")
 
     def _count_total_chunks(self) -> int:
         """Count all chunks currently stored in the vector store."""
+        if self._total_chunks_cache is not None:
+            return self._total_chunks_cache
         try:
             collection = getattr(self.vector_store, "_collection", None)
             if collection is not None and hasattr(collection, "count"):
@@ -152,6 +159,7 @@ class RAGService:
         """Add documents to the vector store and refresh BM25."""
         await self.vector_store.aadd_documents(documents)
         self._refresh_bm25()
+        self._hybrid_cache.clear()
         logger.info(f"Added {len(documents)} chunks and refreshed BM25 index.")
 
     def reset_collection(self) -> None:
@@ -273,13 +281,20 @@ class RAGService:
     async def hybrid_search(self, query: str, k: int = None) -> List[Document]:
         """Perform hybrid search combining Semantic and BM25 in parallel."""
         top_k = k or self.settings.rag_top_k
+        cache_key = (query.strip().lower(), top_k)
+        cached = self._hybrid_cache.get(cache_key)
+        if cached is not None:
+            logger.info("RAG hybrid cache hit: query=%r top_k=%d", query, top_k)
+            return list(cached)
+
         start_time = time.perf_counter()
         total_chunks = self._count_total_chunks()
         logger.info("RAG corpus size: total_chunks=%d query=%r", total_chunks, query)
         
         # 1. Start Semantic Search as a background task (Network call)
         vector_start = time.perf_counter()
-        vector_task = asyncio.create_task(self.vector_store.asimilarity_search(query, k=20))
+        search_k = max(top_k * 3, top_k)
+        vector_task = asyncio.create_task(self.vector_store.asimilarity_search(query, k=search_k))
         
         # 2. Run BM25 Search (CPU-bound, local)
         # We do this while the vector task is running
@@ -287,7 +302,7 @@ class RAGService:
         bm25_results = []
         if self.bm25:
             tokenized_query = self._tokenize(query)
-            bm25_results = self.bm25.get_top_n(tokenized_query, self.bm25_docs, n=20)
+            bm25_results = self.bm25.get_top_n(tokenized_query, self.bm25_docs, n=search_k)
         bm25_elapsed_ms = (time.perf_counter() - bm25_start) * 1000.0
         self.log_result_set("BM25", query, bm25_results, bm25_elapsed_ms)
         
@@ -309,4 +324,6 @@ class RAGService:
             elapsed_ms,
         )
         
-        return fused_results[:top_k]
+        results = fused_results[:top_k]
+        self._hybrid_cache[cache_key] = list(results)
+        return results

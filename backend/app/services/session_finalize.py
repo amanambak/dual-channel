@@ -6,6 +6,7 @@ import uuid
 from app.models.events import TranscriptEvent
 from app.models.events import UtteranceCommittedEvent
 from app.models.session import ConversationMessage
+from app.services.agent_question_context import current_spoken_expected_field
 from app.services.session_text import (
     build_turn_dedupe_key,
     decide_turn_action,
@@ -61,12 +62,14 @@ async def finalize_utterance(session) -> None:
     )
 
     logger.info("ABOUT TO CHECK TRIGGER for: %.30s", text)
+    expected_field = current_spoken_expected_field(session.state)
     decision = decide_turn_action(
         utterance=text,
         average_confidence=average_confidence,
         speaker=speaker,
         last_llm_invoked_at=session.last_llm_invoked_at,
         cooldown=session.min_llm_interval_seconds,
+        expected_field=expected_field,
     )
     session.last_should_extract = decision.run_extraction
     try:

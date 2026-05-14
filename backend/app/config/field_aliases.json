@@ -2,163 +2,1359 @@
   "loan_type": {
     "label": "Loan Type",
     "category_hint": "loan_requirement",
-    "keys": ["loan_type", "lead_details.loan_type"],
-    "aliases": ["loan type", "home loan", "balance transfer", "bt", "top up", "lap"]
+    "keys": [
+      "loan_type",
+      "lead_details.loan_type"
+    ],
+    "aliases": [
+      "loan type",
+      "home loan",
+      "balance transfer",
+      "bt",
+      "top up",
+      "lap"
+    ]
   },
   "loan_amount": {
     "label": "Loan Amount",
     "category_hint": "loan_requirement",
-    "keys": ["loan_amount", "lead_details.loan_amount", "loan_details.loan_amount"],
-    "aliases": ["loan amount", "requirement amount", "requested loan"]
+    "keys": [
+      "loan_amount",
+      "lead_details.loan_amount",
+      "loan_details.loan_amount"
+    ],
+    "aliases": [
+      "loan amount",
+      "requirement amount",
+      "requested loan"
+    ]
   },
   "is_property_decided": {
     "label": "Property Decided",
     "category_hint": "loan_requirement",
-    "keys": ["is_property_decided", "is_property_identified", "lead_details.is_property_decided", "lead_details.is_property_identified", "property_details.is_property_identified"],
-    "aliases": ["property decided", "property identified", "property final"]
+    "keys": [
+      "is_property_decided",
+      "is_property_identified",
+      "lead_details.is_property_decided",
+      "lead_details.is_property_identified",
+      "property_details.is_property_identified"
+    ],
+    "aliases": [
+      "property decided",
+      "property identified",
+      "property final"
+    ]
   },
   "previous_loan_amount": {
     "label": "Previous Loan Amount",
     "category_hint": "loan_requirement",
-    "keys": ["previous_loan_amount", "prev_loan_amount", "lead_details.prev_loan_amount", "loan_details.previous_loan_amount"],
-    "aliases": ["previous loan amount", "old loan amount", "existing loan amount", "bt loan amount"]
+    "keys": [
+      "previous_loan_amount",
+      "prev_loan_amount",
+      "lead_details.prev_loan_amount",
+      "loan_details.previous_loan_amount"
+    ],
+    "aliases": [
+      "previous loan amount",
+      "old loan amount",
+      "existing loan amount",
+      "bt loan amount"
+    ]
   },
   "previous_emi_amount": {
     "label": "Previous EMI Amount",
     "category_hint": "loan_requirement",
-    "keys": ["previous_emi_amount", "prev_emi_amount", "existing_emi_amount", "monthly_emi", "lead_details.prev_emi_amount", "obligations.existing_emi_amount"],
-    "aliases": ["previous emi", "old emi", "existing emi", "monthly emi", "bt emi"]
+    "keys": [
+      "previous_emi_amount",
+      "prev_emi_amount",
+      "existing_emi_amount",
+      "monthly_emi",
+      "lead_details.prev_emi_amount",
+      "obligations.existing_emi_amount"
+    ],
+    "aliases": [
+      "previous emi",
+      "old emi",
+      "existing emi",
+      "monthly emi",
+      "bt emi"
+    ]
   },
   "previous_loan_start_date": {
     "label": "Previous Loan Start Date",
     "category_hint": "loan_requirement",
-    "keys": ["previous_loan_start_date", "prev_loan_start_date", "lead_details.prev_loan_start_date"],
-    "aliases": ["previous loan start date", "old loan start date", "bt start date"]
+    "keys": [
+      "previous_loan_start_date",
+      "prev_loan_start_date",
+      "lead_details.prev_loan_start_date"
+    ],
+    "aliases": [
+      "previous loan start date",
+      "old loan start date",
+      "bt start date"
+    ]
   },
   "previous_tenure": {
     "label": "Previous Tenure",
     "category_hint": "loan_requirement",
-    "keys": ["previous_tenure", "prev_tenure", "lead_details.prev_tenure"],
-    "aliases": ["previous tenure", "old tenure", "bt tenure"]
+    "keys": [
+      "previous_tenure",
+      "prev_tenure",
+      "lead_details.prev_tenure"
+    ],
+    "aliases": [
+      "previous tenure",
+      "old tenure",
+      "bt tenure"
+    ]
   },
   "previous_current_roi": {
     "label": "Previous Current ROI",
     "category_hint": "loan_requirement",
-    "keys": ["previous_current_roi", "prev_current_roi", "lead_details.prev_current_roi"],
-    "aliases": ["previous roi", "current roi", "old loan roi", "bt roi"]
+    "keys": [
+      "previous_current_roi",
+      "prev_current_roi",
+      "lead_details.prev_current_roi"
+    ],
+    "aliases": [
+      "previous roi",
+      "current roi",
+      "old loan roi",
+      "bt roi"
+    ]
   },
   "remaining_loan_amount": {
     "label": "Remaining Loan Amount",
     "category_hint": "loan_requirement",
-    "keys": ["remaining_loan_amount", "lead_details.remaining_loan_amount"],
-    "aliases": ["remaining loan", "outstanding loan", "bt outstanding"]
+    "keys": [
+      "remaining_loan_amount",
+      "lead_details.remaining_loan_amount"
+    ],
+    "aliases": [
+      "remaining loan",
+      "outstanding loan",
+      "bt outstanding"
+    ]
   },
   "profession": {
     "label": "Profession",
     "category_hint": "income_details",
-    "keys": ["profession", "lead_details.profession", "employment_details.profession"],
-    "aliases": ["profession", "employment type", "salaried", "self employed", "business"]
+    "keys": [
+      "profession",
+      "lead_details.profession",
+      "employment_details.profession"
+    ],
+    "aliases": [
+      "profession",
+      "employment type",
+      "salaried",
+      "self employed",
+      "business"
+    ]
   },
   "monthly_salary": {
     "label": "Monthly Salary",
     "category_hint": "income_details",
-    "keys": ["monthly_salary", "lead_details.monthly_salary", "income_details.monthly_salary"],
-    "aliases": ["monthly salary", "salary", "in hand salary"]
+    "keys": [
+      "monthly_salary",
+      "lead_details.monthly_salary",
+      "income_details.monthly_salary"
+    ],
+    "aliases": [
+      "monthly salary",
+      "salary",
+      "in hand salary"
+    ]
   },
   "gross_monthly_salary": {
     "label": "Gross Monthly Salary",
     "category_hint": "income_details",
-    "keys": ["gross_monthly_salary", "income_details.gross_monthly_salary"],
-    "aliases": ["gross salary", "gross monthly salary"]
+    "keys": [
+      "gross_monthly_salary",
+      "income_details.gross_monthly_salary"
+    ],
+    "aliases": [
+      "gross salary",
+      "gross monthly salary"
+    ]
   },
   "income_calculation_mode": {
     "label": "Income Calculation Mode",
     "category_hint": "income_details",
-    "keys": ["income_calculation_mode", "lead_details.income_calculation_mode"],
-    "aliases": ["income calculation", "income mode", "business income mode"]
+    "keys": [
+      "income_calculation_mode",
+      "lead_details.income_calculation_mode"
+    ],
+    "aliases": [
+      "income calculation",
+      "income mode",
+      "business income mode"
+    ]
   },
   "cibil_score": {
     "label": "CIBIL Score",
     "category_hint": "offer_check",
-    "keys": ["cibil_score", "lead_details.cibil_score", "credit_details.cibil_score"],
-    "aliases": ["cibil", "credit score"]
+    "keys": [
+      "cibil_score",
+      "lead_details.cibil_score",
+      "credit_details.cibil_score"
+    ],
+    "aliases": [
+      "cibil",
+      "credit score"
+    ]
   },
   "is_property_identified": {
     "label": "Property Identified",
     "category_hint": "property_details",
-    "keys": ["is_property_identified", "property_details.is_property_identified", "lead_details.is_property_identified", "lead_details.is_property_decided"],
-    "aliases": ["property identified", "property decided", "flat final"]
+    "keys": [
+      "is_property_identified",
+      "property_details.is_property_identified",
+      "lead_details.is_property_identified",
+      "lead_details.is_property_decided"
+    ],
+    "aliases": [
+      "property identified",
+      "property decided",
+      "flat final"
+    ]
   },
   "property_city": {
     "label": "Property City",
     "category_hint": "property_details",
-    "keys": ["property_city", "property_details.property_city", "lead_details.property_city"],
-    "aliases": ["property city", "city", "flat city"]
+    "keys": [
+      "property_city",
+      "property_details.property_city",
+      "lead_details.property_city"
+    ],
+    "aliases": [
+      "property city",
+      "city",
+      "flat city"
+    ]
   },
   "property_state": {
     "label": "Property State",
     "category_hint": "property_details",
-    "keys": ["property_state", "property_details.property_state", "lead_details.property_state"],
-    "aliases": ["property state"]
+    "keys": [
+      "property_state",
+      "property_details.property_state",
+      "lead_details.property_state"
+    ],
+    "aliases": [
+      "property state"
+    ]
   },
   "expected_market_value": {
     "label": "Expected Market Value",
     "category_hint": "property_details",
-    "keys": ["expected_market_value", "expected_property_value", "property_value", "property_details.expected_market_value", "lead_details.expected_market_value", "lead_details.expected_property_value"],
-    "aliases": ["market value", "property value", "expected value"]
+    "keys": [
+      "expected_market_value",
+      "expected_property_value",
+      "property_value",
+      "property_details.expected_market_value",
+      "lead_details.expected_market_value",
+      "lead_details.expected_property_value"
+    ],
+    "aliases": [
+      "market value",
+      "property value",
+      "expected value"
+    ]
   },
   "registration_value": {
     "label": "Registration Value",
     "category_hint": "property_details",
-    "keys": ["registration_value", "property_agreement_value", "property_details.registration_value", "lead_details.registration_value"],
-    "aliases": ["registration value", "agreement value"]
+    "keys": [
+      "registration_value",
+      "property_agreement_value",
+      "property_details.registration_value",
+      "lead_details.registration_value"
+    ],
+    "aliases": [
+      "registration value",
+      "agreement value"
+    ]
   },
   "property_type": {
     "label": "Property Type",
     "category_hint": "property_details",
-    "keys": ["property_type", "property_details.property_type", "lead_details.property_type"],
-    "aliases": ["property type", "flat", "plot", "villa"]
+    "keys": [
+      "property_type",
+      "property_details.property_type",
+      "lead_details.property_type"
+    ],
+    "aliases": [
+      "property type",
+      "flat",
+      "plot",
+      "villa"
+    ]
   },
   "property_sub_type": {
     "label": "Property Sub Type",
     "category_hint": "property_details",
-    "keys": ["property_sub_type", "property_details.property_sub_type", "lead_details.property_sub_type"],
-    "aliases": ["property sub type"]
+    "keys": [
+      "property_sub_type",
+      "property_details.property_sub_type",
+      "lead_details.property_sub_type"
+    ],
+    "aliases": [
+      "property sub type"
+    ]
   },
   "agreement_type": {
     "label": "Agreement Type",
     "category_hint": "property_details",
-    "keys": ["agreement_type", "property_details.agreement_type", "lead_details.agreement_type"],
-    "aliases": ["agreement type"]
+    "keys": [
+      "agreement_type",
+      "property_details.agreement_type",
+      "lead_details.agreement_type"
+    ],
+    "aliases": [
+      "agreement type"
+    ]
   },
   "builder_id": {
     "label": "Builder",
     "category_hint": "property_details",
-    "keys": ["builder_id", "builder_name_id", "property_details.builder_id", "property_details.builder_name_id", "lead_details.builder_id"],
-    "aliases": ["builder", "developer", "builder name"]
+    "keys": [
+      "builder_id",
+      "builder_name_id",
+      "property_details.builder_id",
+      "property_details.builder_name_id",
+      "lead_details.builder_id"
+    ],
+    "aliases": [
+      "builder",
+      "developer",
+      "builder name"
+    ]
   },
   "project_id": {
     "label": "Project",
     "category_hint": "property_details",
-    "keys": ["project_id", "project_name", "preferred_project_name", "property_details.project_id", "property_details.project_name", "lead_details.project_id"],
-    "aliases": ["project", "project name"]
+    "keys": [
+      "project_id",
+      "project_name",
+      "preferred_project_name",
+      "property_details.project_id",
+      "property_details.project_name",
+      "lead_details.project_id"
+    ],
+    "aliases": [
+      "project",
+      "project name"
+    ]
   },
   "check_oc_cc": {
     "label": "OC/CC Check",
     "category_hint": "property_details",
-    "keys": ["check_oc_cc", "property_details.check_oc_cc", "lead_details.check_oc_cc"],
-    "aliases": ["oc cc", "occupancy certificate", "completion certificate"]
+    "keys": [
+      "check_oc_cc",
+      "property_details.check_oc_cc",
+      "lead_details.check_oc_cc"
+    ],
+    "aliases": [
+      "oc cc",
+      "occupancy certificate",
+      "completion certificate"
+    ]
   },
   "ready_for_registration": {
     "label": "Ready For Registration",
     "category_hint": "property_details",
-    "keys": ["ready_for_registration", "property_details.ready_for_registration", "lead_details.ready_for_registration"],
-    "aliases": ["ready for registration", "registration ready"]
+    "keys": [
+      "ready_for_registration",
+      "property_details.ready_for_registration",
+      "lead_details.ready_for_registration"
+    ],
+    "aliases": [
+      "ready for registration",
+      "registration ready"
+    ]
   },
   "fulfillment_type": {
     "label": "Fulfillment Type",
     "category_hint": "fulfillment",
-    "keys": ["fulfillment_type", "lead_details.fulfillment_type"],
-    "aliases": ["fulfillment", "process type", "next process"]
+    "keys": [
+      "fulfillment_type",
+      "lead_details.fulfillment_type"
+    ],
+    "aliases": [
+      "fulfillment",
+      "process type",
+      "next process"
+    ]
+  },
+  "customer_first_name": {
+    "label": "First Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.first_name",
+      "customer_details.first_name"
+    ],
+    "realtime_keys": [
+      "first_name",
+      "customer_first_name"
+    ],
+    "aliases": [
+      "first name",
+      "customer name",
+      "naam"
+    ]
+  },
+  "customer_last_name": {
+    "label": "Last Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.last_name",
+      "customer_details.last_name"
+    ],
+    "realtime_keys": [
+      "last_name",
+      "customer_last_name"
+    ],
+    "aliases": [
+      "last name",
+      "surname"
+    ]
+  },
+  "customer_gender": {
+    "label": "Gender",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.gender",
+      "customer_details.gender"
+    ],
+    "realtime_keys": [
+      "gender",
+      "customer_gender"
+    ],
+    "aliases": [
+      "gender"
+    ]
+  },
+  "customer_dob": {
+    "label": "DOB",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.dob",
+      "customer_details.dob",
+      "kyc_details.dob"
+    ],
+    "realtime_keys": [
+      "dob",
+      "customer_dob"
+    ],
+    "aliases": [
+      "dob",
+      "date of birth",
+      "birth date"
+    ]
+  },
+  "customer_mobile": {
+    "label": "Mobile Number",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.mobile",
+      "contact_details.mobile",
+      "contact_details.customer_mobile"
+    ],
+    "realtime_keys": [
+      "mobile",
+      "mobile_number",
+      "customer_mobile",
+      "phone_number"
+    ],
+    "aliases": [
+      "mobile",
+      "mobile number",
+      "phone",
+      "customer phone",
+      "contact number"
+    ]
+  },
+  "customer_email": {
+    "label": "Email",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.email",
+      "contact_details.email"
+    ],
+    "realtime_keys": [
+      "email",
+      "customer_email"
+    ],
+    "aliases": [
+      "email",
+      "personal email"
+    ]
+  },
+  "customer_official_email": {
+    "label": "Official Email",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.official_email_id",
+      "customer.official_email",
+      "contact_details.official_email_id"
+    ],
+    "realtime_keys": [
+      "official_email_id",
+      "official_email",
+      "customer_official_email"
+    ],
+    "aliases": [
+      "official email",
+      "work email",
+      "office email"
+    ]
+  },
+  "customer_pan": {
+    "label": "PAN No.",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.pancard_no",
+      "kyc_details.pancard_no"
+    ],
+    "realtime_keys": [
+      "pancard_no",
+      "pan_no",
+      "pan_n0",
+      "pan_number",
+      "customer_pan"
+    ],
+    "aliases": [
+      "pan",
+      "pan no",
+      "pan number",
+      "pan card",
+      "pancard"
+    ]
+  },
+  "customer_aadhaar": {
+    "label": "Aadhaar Number",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.aadhar_no",
+      "kyc_details.aadhar_no"
+    ],
+    "realtime_keys": [
+      "aadhar_no",
+      "aadhaar_no",
+      "customer_aadhaar"
+    ],
+    "aliases": [
+      "aadhaar",
+      "aadhar",
+      "aadhaar number"
+    ]
+  },
+  "customer_marital_status": {
+    "label": "Marital Status",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.marital_status",
+      "customer_details.marital_status"
+    ],
+    "realtime_keys": [
+      "marital_status",
+      "customer_marital_status"
+    ],
+    "aliases": [
+      "marital status",
+      "married",
+      "single"
+    ],
+    "options": [
+      "single",
+      "married",
+      "live_in_partner",
+      "separated",
+      "annulled_divorced",
+      "widower"
+    ]
+  },
+  "customer_spouse_name": {
+    "label": "Spouse Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.spouse_name",
+      "customer_details.spouse_name"
+    ],
+    "realtime_keys": [
+      "spouse_name",
+      "customer_spouse_name"
+    ],
+    "aliases": [
+      "spouse name",
+      "wife name",
+      "husband name"
+    ]
+  },
+  "customer_mother_name": {
+    "label": "Mother Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.mother_name",
+      "customer_details.mother_name"
+    ],
+    "realtime_keys": [
+      "mother_name",
+      "customer_mother_name"
+    ],
+    "aliases": [
+      "mother name",
+      "mother's name"
+    ]
+  },
+  "customer_qualification": {
+    "label": "Qualification",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.qualification",
+      "customer_details.qualification"
+    ],
+    "realtime_keys": [
+      "qualification",
+      "customer_qualification"
+    ],
+    "aliases": [
+      "qualification",
+      "education"
+    ],
+    "options": [
+      "primary",
+      "secondary",
+      "graduate",
+      "pg"
+    ]
+  },
+  "customer_preferred_language": {
+    "label": "Preferred Language",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.preferred_language",
+      "customer_details.preferred_language"
+    ],
+    "realtime_keys": [
+      "preferred_language",
+      "customer_preferred_language"
+    ],
+    "aliases": [
+      "preferred language",
+      "language"
+    ]
+  },
+  "customer_pincode": {
+    "label": "Pin Code",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.pincode",
+      "current_address.cra_pincode",
+      "residence_details.cra_pincode"
+    ],
+    "realtime_keys": [
+      "pincode",
+      "cra_pincode",
+      "customer_pincode"
+    ],
+    "aliases": [
+      "pin code",
+      "pincode",
+      "postal code"
+    ]
+  },
+  "customer_state": {
+    "label": "State",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.state",
+      "current_address.cra_state",
+      "residence_details.cra_state"
+    ],
+    "realtime_keys": [
+      "state",
+      "cra_state",
+      "customer_state"
+    ],
+    "aliases": [
+      "state",
+      "rajya"
+    ]
+  },
+  "customer_city": {
+    "label": "City",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.city",
+      "current_address.cra_city",
+      "residence_details.cra_city"
+    ],
+    "realtime_keys": [
+      "city",
+      "cra_city",
+      "customer_city"
+    ],
+    "aliases": [
+      "city",
+      "shehar"
+    ]
+  },
+  "customer_address_line1": {
+    "label": "Address Line 1",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.address_line1",
+      "current_address.cra_address1",
+      "residence_details.cra_address1"
+    ],
+    "realtime_keys": [
+      "address_line1",
+      "cra_address1",
+      "customer_address_line1"
+    ],
+    "aliases": [
+      "address",
+      "address line 1",
+      "current address"
+    ]
+  },
+  "customer_address_line2": {
+    "label": "Address Line 2",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.address_line2",
+      "current_address.cra_address2",
+      "residence_details.cra_address2"
+    ],
+    "realtime_keys": [
+      "address_line2",
+      "cra_address2",
+      "customer_address_line2"
+    ],
+    "aliases": [
+      "address line 2"
+    ]
+  },
+  "customer_occupation": {
+    "label": "Occupation",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.occupation",
+      "employment_details.occupation"
+    ],
+    "realtime_keys": [
+      "occupation",
+      "customer_occupation"
+    ],
+    "aliases": [
+      "occupation",
+      "profession"
+    ]
+  },
+  "customer_designation": {
+    "label": "Designation",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.designation",
+      "employment_details.designation"
+    ],
+    "realtime_keys": [
+      "designation",
+      "customer_designation"
+    ],
+    "aliases": [
+      "designation",
+      "job title"
+    ]
+  },
+  "customer_office_address": {
+    "label": "Office Address",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.office_address",
+      "employment_details.office_address",
+      "employment_details.company_address"
+    ],
+    "realtime_keys": [
+      "office_address",
+      "company_address",
+      "customer_office_address"
+    ],
+    "aliases": [
+      "office address",
+      "company address"
+    ]
+  },
+  "customer_company_name": {
+    "label": "Company Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.company_name",
+      "employment_details.company_name"
+    ],
+    "realtime_keys": [
+      "company_name",
+      "customer_company_name"
+    ],
+    "aliases": [
+      "company",
+      "company name",
+      "employer"
+    ]
+  },
+  "customer_total_work_experience": {
+    "label": "Total Work Experience",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.work_experience",
+      "employment_details.work_experience"
+    ],
+    "realtime_keys": [
+      "work_experience",
+      "customer_total_work_experience"
+    ],
+    "aliases": [
+      "work experience",
+      "total experience"
+    ]
+  },
+  "customer_current_job_years": {
+    "label": "Current Job Years",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.time_in_current_co",
+      "employment_details.time_in_current_co"
+    ],
+    "realtime_keys": [
+      "time_in_current_co",
+      "customer_current_job_years"
+    ],
+    "aliases": [
+      "current company years",
+      "current job years"
+    ]
+  },
+  "customer_dependents": {
+    "label": "Dependents",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "customer.no_of_dependent",
+      "customer.dependents",
+      "residence_details.dependents",
+      "residence_details.no_of_dependent"
+    ],
+    "realtime_keys": [
+      "dependents",
+      "no_of_dependent",
+      "customer_dependents"
+    ],
+    "aliases": [
+      "dependents",
+      "family dependents"
+    ]
+  },
+  "has_co_applicant": {
+    "label": "Has Co-applicant",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.has_co_applicant",
+      "coapplicant.has_co_applicant"
+    ],
+    "realtime_keys": [
+      "has_co_applicant",
+      "co_applicant"
+    ],
+    "aliases": [
+      "co applicant",
+      "co-applicant",
+      "joint applicant"
+    ]
+  },
+  "coapplicant_first_name": {
+    "label": "Co-applicant First Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.first_name",
+      "coapplicant.first_name"
+    ],
+    "realtime_keys": [
+      "coapplicant_first_name",
+      "co_applicant_first_name"
+    ],
+    "aliases": [
+      "co applicant first name"
+    ]
+  },
+  "coapplicant_relationship": {
+    "label": "Co-applicant Relationship",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.relationship_with_customer",
+      "coapplicant.relationship_with_customer"
+    ],
+    "realtime_keys": [
+      "relationship_with_customer",
+      "coapplicant_relationship",
+      "co_applicant_relationship"
+    ],
+    "aliases": [
+      "co applicant relationship",
+      "relationship with customer"
+    ],
+    "options": [
+      "mother",
+      "father",
+      "brother",
+      "sister",
+      "spouse",
+      "other",
+      "daughter"
+    ]
+  },
+  "coapplicant_last_name": {
+    "label": "Co-applicant Last Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.last_name",
+      "coapplicant.last_name"
+    ],
+    "realtime_keys": [
+      "coapplicant_last_name",
+      "co_applicant_last_name"
+    ],
+    "aliases": [
+      "co applicant last name"
+    ]
+  },
+  "coapplicant_mobile": {
+    "label": "Co-applicant Mobile",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.mobile",
+      "coapplicant.mobile"
+    ],
+    "realtime_keys": [
+      "coapplicant_mobile",
+      "co_applicant_mobile",
+      "ca_mobile"
+    ],
+    "aliases": [
+      "co applicant mobile",
+      "co applicant phone"
+    ]
+  },
+  "coapplicant_email": {
+    "label": "Co-applicant Email",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.email",
+      "coapplicant.email",
+      "co_applicant.ca_email",
+      "coapplicant.ca_email"
+    ],
+    "realtime_keys": [
+      "coapplicant_email",
+      "co_applicant_email",
+      "ca_email"
+    ],
+    "aliases": [
+      "co applicant email"
+    ]
+  },
+  "coapplicant_dob": {
+    "label": "Co-applicant DOB",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.dob",
+      "coapplicant.dob"
+    ],
+    "realtime_keys": [
+      "coapplicant_dob",
+      "co_applicant_dob"
+    ],
+    "aliases": [
+      "co applicant dob"
+    ]
+  },
+  "coapplicant_pan": {
+    "label": "Co-applicant PAN",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.pancard_no",
+      "coapplicant.pancard_no"
+    ],
+    "realtime_keys": [
+      "coapplicant_pan",
+      "co_applicant_pan",
+      "ca_pancard_no"
+    ],
+    "aliases": [
+      "co applicant pan",
+      "co applicant pancard"
+    ]
+  },
+  "coapplicant_qualification": {
+    "label": "Co-applicant Qualification",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.qualification",
+      "coapplicant.qualification"
+    ],
+    "realtime_keys": [
+      "coapplicant_qualification",
+      "co_applicant_qualification",
+      "ca_qualification"
+    ],
+    "aliases": [
+      "co applicant qualification",
+      "co applicant education"
+    ],
+    "options": [
+      "primary",
+      "secondary",
+      "graduate",
+      "pg"
+    ]
+  },
+  "coapplicant_mother_name": {
+    "label": "Co-applicant Mother Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.mother_name",
+      "coapplicant.mother_name"
+    ],
+    "realtime_keys": [
+      "coapplicant_mother_name",
+      "co_applicant_mother_name",
+      "ca_mother_name"
+    ],
+    "aliases": [
+      "co applicant mother name",
+      "co applicant mother's name"
+    ]
+  },
+  "coapplicant_type": {
+    "label": "Co-applicant Type",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.type",
+      "coapplicant.type",
+      "co_applicant.ca_type",
+      "coapplicant.ca_type"
+    ],
+    "realtime_keys": [
+      "coapplicant_type",
+      "co_applicant_type",
+      "ca_type"
+    ],
+    "aliases": [
+      "co applicant type",
+      "financial co applicant",
+      "non financial co applicant"
+    ],
+    "options": [
+      "financial",
+      "non_financial"
+    ]
+  },
+  "coapplicant_marital_status": {
+    "label": "Co-applicant Marital Status",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.marital_status",
+      "coapplicant.marital_status"
+    ],
+    "realtime_keys": [
+      "coapplicant_marital_status",
+      "co_applicant_marital_status",
+      "ca_marital_status"
+    ],
+    "aliases": [
+      "co applicant marital status"
+    ],
+    "options": [
+      "single",
+      "married",
+      "live_in_partner",
+      "separated",
+      "annulled_divorced",
+      "widower"
+    ]
+  },
+  "coapplicant_gender": {
+    "label": "Co-applicant Gender",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.gender",
+      "coapplicant.gender"
+    ],
+    "realtime_keys": [
+      "coapplicant_gender",
+      "co_applicant_gender",
+      "ca_gender"
+    ],
+    "aliases": [
+      "co applicant gender"
+    ]
+  },
+  "coapplicant_aadhaar": {
+    "label": "Co-applicant Aadhaar Number",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.aadhar_no",
+      "coapplicant.aadhar_no"
+    ],
+    "realtime_keys": [
+      "coapplicant_aadhaar",
+      "co_applicant_aadhaar",
+      "ca_aadhar_no",
+      "ca_aadhaar_no"
+    ],
+    "aliases": [
+      "co applicant aadhaar",
+      "co applicant aadhar"
+    ]
+  },
+  "coapplicant_same_as_customer_address": {
+    "label": "Co-applicant Same Address",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.same_as_cus_addr",
+      "coapplicant.same_as_cus_addr",
+      "co_applicant.same_as_customer_address",
+      "coapplicant.same_as_customer_address"
+    ],
+    "realtime_keys": [
+      "same_as_cus_addr",
+      "coapplicant_same_as_customer_address",
+      "co_applicant_same_address"
+    ],
+    "aliases": [
+      "co applicant same address",
+      "same as customer address"
+    ],
+    "options": [
+      "0",
+      "1"
+    ]
+  },
+  "coapplicant_pincode": {
+    "label": "Co-applicant Pin Code",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.cra_pincode",
+      "coapplicant.cra_pincode",
+      "co_applicant.pincode",
+      "coapplicant.pincode"
+    ],
+    "realtime_keys": [
+      "coapplicant_pincode",
+      "co_applicant_pincode",
+      "ca_cra_pincode"
+    ],
+    "aliases": [
+      "co applicant pincode"
+    ]
+  },
+  "coapplicant_state": {
+    "label": "Co-applicant State",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.cra_state",
+      "coapplicant.cra_state",
+      "co_applicant.state",
+      "coapplicant.state"
+    ],
+    "realtime_keys": [
+      "coapplicant_state",
+      "co_applicant_state",
+      "ca_cra_state"
+    ],
+    "aliases": [
+      "co applicant state"
+    ]
+  },
+  "coapplicant_city": {
+    "label": "Co-applicant City",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.cra_city",
+      "coapplicant.cra_city",
+      "co_applicant.city",
+      "coapplicant.city"
+    ],
+    "realtime_keys": [
+      "coapplicant_city",
+      "co_applicant_city",
+      "ca_cra_city"
+    ],
+    "aliases": [
+      "co applicant city"
+    ]
+  },
+  "coapplicant_address_line1": {
+    "label": "Co-applicant Address Line 1",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.cra_address1",
+      "coapplicant.cra_address1",
+      "co_applicant.address_line1",
+      "coapplicant.address_line1"
+    ],
+    "realtime_keys": [
+      "coapplicant_address_line1",
+      "co_applicant_address_line1",
+      "ca_cra_address1"
+    ],
+    "aliases": [
+      "co applicant address"
+    ]
+  },
+  "coapplicant_address_line2": {
+    "label": "Co-applicant Address Line 2",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.address_line2",
+      "coapplicant.address_line2"
+    ],
+    "realtime_keys": [
+      "coapplicant_address_line2",
+      "co_applicant_address_line2",
+      "ca_cra_address2"
+    ],
+    "aliases": [
+      "co applicant address line 2"
+    ]
+  },
+  "coapplicant_office_address": {
+    "label": "Co-applicant Office Address",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.office_address",
+      "coapplicant.office_address"
+    ],
+    "realtime_keys": [
+      "coapplicant_office_address",
+      "co_applicant_office_address",
+      "ca_office_address"
+    ],
+    "aliases": [
+      "co applicant office address"
+    ]
+  },
+  "coapplicant_occupation": {
+    "label": "Co-applicant Occupation",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.occupation",
+      "coapplicant.occupation"
+    ],
+    "realtime_keys": [
+      "coapplicant_occupation",
+      "co_applicant_occupation",
+      "ca_occupation"
+    ],
+    "aliases": [
+      "co applicant occupation"
+    ]
+  },
+  "coapplicant_official_email": {
+    "label": "Co-applicant Official Email",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.official_email_id",
+      "coapplicant.official_email_id"
+    ],
+    "realtime_keys": [
+      "coapplicant_official_email",
+      "co_applicant_official_email",
+      "ca_official_email_id"
+    ],
+    "aliases": [
+      "co applicant official email",
+      "co applicant office email"
+    ]
+  },
+  "coapplicant_spouse_name": {
+    "label": "Co-applicant Spouse Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.spouse_name",
+      "coapplicant.spouse_name"
+    ],
+    "realtime_keys": [
+      "coapplicant_spouse_name",
+      "co_applicant_spouse_name",
+      "ca_spouse_name"
+    ],
+    "aliases": [
+      "co applicant spouse name"
+    ]
+  },
+  "coapplicant_designation": {
+    "label": "Co-applicant Designation",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.designation",
+      "coapplicant.designation"
+    ],
+    "realtime_keys": [
+      "coapplicant_designation",
+      "co_applicant_designation",
+      "ca_designation"
+    ],
+    "aliases": [
+      "co applicant designation"
+    ]
+  },
+  "coapplicant_total_work_experience": {
+    "label": "Co-applicant Total Work Experience",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.total_work_experience",
+      "coapplicant.total_work_experience"
+    ],
+    "realtime_keys": [
+      "coapplicant_total_work_experience",
+      "co_applicant_total_work_experience",
+      "ca_total_work_experience"
+    ],
+    "aliases": [
+      "co applicant total work experience"
+    ]
+  },
+  "coapplicant_current_job_years": {
+    "label": "Co-applicant Current Job Years",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.no_of_current_job_years",
+      "coapplicant.no_of_current_job_years"
+    ],
+    "realtime_keys": [
+      "coapplicant_current_job_years",
+      "co_applicant_current_job_years",
+      "ca_no_of_current_job_years"
+    ],
+    "aliases": [
+      "co applicant current job years"
+    ]
+  },
+  "coapplicant_company_name": {
+    "label": "Co-applicant Company Name",
+    "category_hint": "customer_details",
+    "graphql_paths": [
+      "co_applicant.company_name",
+      "coapplicant.company_name"
+    ],
+    "realtime_keys": [
+      "coapplicant_company_name",
+      "co_applicant_company_name",
+      "ca_company_name"
+    ],
+    "aliases": [
+      "co applicant company name"
+    ]
   }
 }

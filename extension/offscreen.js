@@ -15,7 +15,7 @@ let isAgentMicPaused = false;
 let backendSessionReady = false;
 let queuedAudioFrames = [];
 
-const MAX_QUEUED_AUDIO_FRAMES = 800;
+const MAX_QUEUED_AUDIO_FRAMES = 120;
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'START_CAPTURE' && message.offscreen) {
@@ -262,7 +262,8 @@ function sendLeadContextToBackend(context = {}) {
   const leadId = context.leadId || context.lead_id || null;
   const leadFacts = context.leadFacts || context.lead_facts || null;
   const leadMissingFields = context.leadMissingFields || context.lead_missing_fields || null;
-  if (!leadId && !leadFacts && !leadMissingFields) {
+  const leadProfile = context.leadProfile || context.profile || context.lead_profile || null;
+  if (!leadId && !leadFacts && !leadMissingFields && !leadProfile) {
     return;
   }
 
@@ -271,6 +272,7 @@ function sendLeadContextToBackend(context = {}) {
     leadId,
     leadFacts,
     leadMissingFields,
+    profile: leadProfile,
   }));
 }
 
@@ -398,6 +400,14 @@ function handleBackendMessage(message) {
       utteranceId: message.utteranceId,
       fullText: message.fullText,
       badgeType: message.badgeType
+    }).catch(() => {});
+    return;
+  }
+
+  if (message.type === 'extracted_fields_update') {
+    chrome.runtime.sendMessage({
+      type: 'EXTRACTED_FIELDS_UPDATE',
+      fields: message.fields || {}
     }).catch(() => {});
     return;
   }

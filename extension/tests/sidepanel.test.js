@@ -34,3 +34,20 @@ test('sidepanel can collapse call controls behind a bubble', () => {
   assert.match(html, /\.controls-collapsed \.control-section/);
   assert.match(html, /\.control-bubble/);
 });
+
+test('summary extracted fields can be reviewed and saved to lead profile', () => {
+  const source = fs.readFileSync(sidepanelJsPath, 'utf8');
+  const html = fs.readFileSync(sidepanelHtmlPath, 'utf8');
+
+  assert.match(source, /readEditedSummaryFields/);
+  assert.match(source, /saveEditedSummaryFields/);
+  assert.match(source, /latestSummary\.customer_info = readEditedSummaryFields\(\)/);
+  assert.match(source, /UPDATE_LEAD_PROFILE_FIELDS/);
+  assert.match(source, /applyLeadProfileUpdate/);
+  assert.match(source, /summary-value-input/);
+  assert.match(source, /summary-save-btn/);
+  assert.match(source, /Save Extracted Details/);
+  assert.match(source, /Save updates the lead profile after your review/);
+  assert.match(html, /\.summary-value-input/);
+  assert.match(html, /\.summary-save-status/);
+});

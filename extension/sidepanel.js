@@ -46,6 +46,7 @@ let activePanelTab = 'call';
 let chatMessages = [];
 let chatSending = false;
 let latestSummary = null;
+let latestLeadProfile = null;
 let latestLeadDetail = null;
 let latestLeadId = null;
 let latestLeadFacts = null;
@@ -107,6 +108,7 @@ async function initializePanel() {
     chrome.storage.local.get([
       'chatMessages',
       'activePanelTab',
+      'currentLeadProfile',
       'currentLeadDetail',
       'currentLeadId',
       'currentLeadFacts',
@@ -330,6 +332,7 @@ async function loadStoredLeadDetail() {
     .get([
       'currentLeadDetail',
       'currentLeadId',
+      'currentLeadProfile',
       'currentLeadFacts',
       'currentLeadMissingFields',
       'currentLeadContext',
@@ -338,10 +341,11 @@ async function loadStoredLeadDetail() {
     ])
     .catch(() => ({}));
 
-  latestLeadDetail = stored.currentLeadDetail || null;
+  latestLeadProfile = stored.currentLeadProfile || null;
+  latestLeadDetail = latestLeadProfile?.raw || stored.currentLeadDetail || null;
   latestLeadId = stored.currentLeadId || null;
-  latestLeadFacts = stored.currentLeadFacts || LeadDetailApi.buildLeadFacts(latestLeadDetail);
-  latestLeadMissingFields = stored.currentLeadMissingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadFacts = latestLeadProfile?.display || stored.currentLeadFacts || null;
+  latestLeadMissingFields = latestLeadProfile?.missing_fields || stored.currentLeadMissingFields || null;
   latestLeadContext = stored.currentLeadContext || null;
 
   if (leadIdInput && latestLeadId) {
@@ -407,6 +411,7 @@ async function fetchLeadDetailByInput() {
     updateLeadDetailStatus(`Lead detail fetch failed: ${response.error}`, 'error');
     latestLeadDetail = null;
     latestLeadId = null;
+    latestLeadProfile = null;
     latestLeadFacts = null;
     latestLeadMissingFields = null;
     latestLeadContext = null;
@@ -414,10 +419,11 @@ async function fetchLeadDetailByInput() {
     return;
   }
 
-  latestLeadDetail = response.detail || null;
+  latestLeadProfile = response.profile || null;
+  latestLeadDetail = response.profile?.raw || response.detail || null;
   latestLeadId = response.leadId || leadId;
-  latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
-  latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadFacts = response.profile?.display || response.facts || null;
+  latestLeadMissingFields = response.profile?.missing_fields || response.missingFields || null;
   latestLeadContext = response.leadContext || null;
   if (leadIdInput) {
     leadIdInput.value = String(latestLeadId || leadId);
@@ -786,10 +792,11 @@ async function handleLeadRefreshConfirmation(shouldRefresh) {
     throw new Error(response.error);
   }
 
-  latestLeadDetail = response.detail || null;
+  latestLeadProfile = response.profile || null;
+  latestLeadDetail = response.profile?.raw || response.detail || null;
   latestLeadId = response.leadId || leadId;
-  latestLeadFacts = LeadDetailApi.buildLeadFacts(latestLeadDetail);
-  latestLeadMissingFields = response.missingFields || LeadDetailApi.buildLeadMissingFields(latestLeadDetail);
+  latestLeadFacts = response.profile?.display || response.facts || null;
+  latestLeadMissingFields = response.profile?.missing_fields || response.missingFields || null;
   latestLeadContext = response.leadContext || null;
   updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
   renderLeadDetailData(latestLeadDetail, latestLeadContext, response.documentStatus || null, response.dreDocumentError || '');
@@ -830,15 +837,19 @@ async function sendChatMessage(textOverride = null, options = {}) {
     }));
     const storedLead = await chrome.storage.local
       .get([
+        'currentLeadProfile',
         'currentLeadDetail',
         'currentLeadId',
+        'currentLeadFacts',
+        'currentLeadMissingFields',
         'currentLeadContext',
         'currentLeadDreDocuments',
         'currentLeadDreDocumentError',
         'currentLeadDocumentStatus',
       ])
       .catch(() => ({}));
-    const leadDetailForChat = latestLeadDetail || storedLead.currentLeadDetail || null;
+    const storedProfile = storedLead.currentLeadProfile || null;
+    const leadDetailForChat = latestLeadDetail || storedProfile?.raw || storedLead.currentLeadDetail || null;
     const leadIdForChat = latestLeadId || storedLead.currentLeadId || normalizeLeadIdInput(leadIdInput?.value) || null;
     const leadContextForChat = latestLeadContext || storedLead.currentLeadContext || null;
     const chatPayload = {
@@ -847,6 +858,7 @@ async function sendChatMessage(textOverride = null, options = {}) {
       history,
       lead_id: leadIdForChat,
       lead_refreshed: Boolean(options.leadRefreshed),
+      profile: latestLeadProfile || storedProfile || null,
       lead_context: leadContextForChat,
       lead_dre_documents: storedLead.currentLeadDreDocuments || null,
       lead_dre_document_error: storedLead.currentLeadDreDocumentError || null,
@@ -855,8 +867,11 @@ async function sendChatMessage(textOverride = null, options = {}) {
 
     if (leadDetailForChat) {
       chatPayload.lead_detail = leadDetailForChat;
-      chatPayload.lead_facts = LeadDetailApi.buildLeadFacts(leadDetailForChat);
-      chatPayload.lead_missing_fields = LeadDetailApi.buildLeadMissingFields(leadDetailForChat);
+      chatPayload.lead_facts = latestLeadProfile?.display || storedProfile?.display || storedLead.currentLeadFacts || latestLeadFacts || null;
+      chatPayload.lead_missing_fields = latestLeadProfile?.missing_fields || storedProfile?.missing_fields || storedLead.currentLeadMissingFields || latestLeadMissingFields || null;
+    } else if (storedLead.currentLeadFacts) {
+      chatPayload.lead_facts = storedLead.currentLeadFacts;
+      chatPayload.lead_missing_fields = storedLead.currentLeadMissingFields || null;
     }
 
     console.group('[LeadDebug][sidepanel] chat payload');
@@ -967,6 +982,24 @@ const SIDEPANEL_MESSAGE_HANDLERS = {
 
   API_ERROR(message) {
     addErrorToContainer(message.message, message.source);
+  },
+
+  LEAD_CONTEXT_UPDATED(message) {
+    latestLeadProfile = message.profile || latestLeadProfile;
+    latestLeadDetail = message.profile?.raw || message.detail || latestLeadDetail;
+    latestLeadId = message.leadId || latestLeadId;
+    latestLeadFacts = message.profile?.display || message.facts || latestLeadFacts;
+    latestLeadMissingFields = message.profile?.missing_fields || message.missingFields || latestLeadMissingFields;
+    latestLeadContext = message.leadContext || latestLeadContext;
+    if (latestLeadDetail) {
+      updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+      renderLeadDetailData(
+        latestLeadDetail,
+        latestLeadContext,
+        latestLeadContext?.document_status || null,
+        latestLeadContext?.document_error || '',
+      );
+    }
   },
 };
 
@@ -1331,6 +1364,77 @@ function buildSummaryFieldMessage(customerInfo) {
   return `Extracted fields ready for database review:\n${lines.join('\n')}`;
 }
 
+function readEditedSummaryFields() {
+  const inputs = modalBody.querySelectorAll('.summary-value-input');
+  const customerInfo = {};
+
+  for (const input of inputs) {
+    const key = input.dataset.fieldKey;
+    if (!key) {
+      continue;
+    }
+
+    const value = input.value.trim();
+    if (value) {
+      customerInfo[key] = value;
+    }
+  }
+
+  return customerInfo;
+}
+
+function applyLeadProfileUpdate(response) {
+  latestLeadProfile = response.profile || latestLeadProfile;
+  latestLeadDetail = response.profile?.raw || response.detail || latestLeadDetail;
+  latestLeadId = response.leadId || latestLeadId;
+  latestLeadFacts = response.profile?.display || response.facts || latestLeadFacts;
+  latestLeadMissingFields = response.profile?.missing_fields || response.missingFields || latestLeadMissingFields;
+  latestLeadContext = response.leadContext || latestLeadContext;
+
+  if (!latestLeadDetail) {
+    return;
+  }
+
+  updateLeadDetailStatus(formatLeadDetailStatus(latestLeadId, latestLeadDetail, latestLeadMissingFields), 'success');
+  renderLeadDetailData(
+    latestLeadDetail,
+    latestLeadContext,
+    response.documentStatus || latestLeadContext?.document_status || null,
+    response.dreDocumentError || latestLeadContext?.document_error || '',
+  );
+}
+
+async function saveEditedSummaryFields() {
+  if (!latestSummary) {
+    latestSummary = {};
+  }
+
+  latestSummary.customer_info = readEditedSummaryFields();
+  const customerInfo = latestSummary.customer_info;
+  if (!Object.keys(customerInfo).length) {
+    displaySummary(latestSummary, { saved: true });
+    return;
+  }
+
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      {
+        type: 'UPDATE_LEAD_PROFILE_FIELDS',
+        fields: customerInfo,
+      },
+      (reply) => resolve(reply || {}),
+    );
+  });
+
+  if (response.error) {
+    displaySummary(latestSummary, { saveError: response.error });
+    return;
+  }
+
+  applyLeadProfileUpdate(response);
+  displaySummary(latestSummary, { saved: true });
+}
+
 async function sendSummaryToChat() {
   const customerInfo = latestSummary?.customer_info || {};
   const entries = Object.entries(customerInfo);
@@ -1399,10 +1503,16 @@ async function sendSummaryToChat() {
   }
 }
 
-function displaySummary(summary) {
+function displaySummary(summary, options = {}) {
   latestSummary = summary || null;
   const customerInfo = summary?.customer_info || {};
   const entries = Object.entries(customerInfo);
+  const savedNotice = options.saved
+    ? '<div class="summary-save-status" role="status">Reviewed details saved to the lead profile.</div>'
+    : '';
+  const errorNotice = options.saveError
+    ? `<div class="summary-save-status error" role="alert">Profile update failed: ${escapeHtml(options.saveError)}</div>`
+    : '';
 
   if (entries.length === 0) {
     modalBody.innerHTML = `
@@ -1415,31 +1525,35 @@ function displaySummary(summary) {
           </div>
         </div>
       </div>
+      ${savedNotice}
+      ${errorNotice}
       <div class="summary-actions">
+        <button id="summary-save-btn" class="summary-secondary-btn" type="button">
+          Save Extracted Details
+        </button>
         <button id="summary-send-btn" class="summary-secondary-btn" type="button">
           Send to Chat
         </button>
         <div class="summary-actions-note">
-          Returns the recommended extracted field(s) to insert into the database.
+          Save updates the lead profile after your review. Send to Chat uses the reviewed values.
         </div>
       </div>
     `;
-    const button = document.getElementById('summary-send-btn');
-    if (button) {
-      button.onclick = () => {
-        sendSummaryToChat().catch((err) => {
-          alert(`Failed to send summary to chat: ${err.message}`);
-        });
-      };
-    }
+    attachSummaryActionHandlers();
     summaryModal.classList.add('active');
     return;
   }
 
-  const html = entries.map(([key, value]) => `
+  const html = entries.map(([key, value], index) => `
     <div class="summary-row">
-      <div class="summary-key">${escapeHtml(key)}</div>
-      <div class="summary-value">${escapeHtml(value)}</div>
+      <label class="summary-key" for="summary-field-${index}">${escapeHtml(key)}</label>
+      <input
+        id="summary-field-${index}"
+        class="summary-value-input"
+        type="text"
+        data-field-key="${escapeAttribute(key)}"
+        value="${escapeAttribute(value)}"
+      >
     </div>
   `).join('');
 
@@ -1447,29 +1561,57 @@ function displaySummary(summary) {
     <div class="summary-section">
       <h3>Customer Info</h3>
       <div class="summary-card">${html}</div>
-    </div>
+      </div>
+      ${savedNotice}
+      ${errorNotice}
       <div class="summary-actions">
+        <button id="summary-save-btn" class="summary-secondary-btn" type="button">
+          Save Extracted Details
+        </button>
         <button id="summary-send-btn" class="summary-secondary-btn" type="button">
           Send to Chat
         </button>
         <div class="summary-actions-note">
-          Returns the recommended extracted field(s) to insert into the database.
+          Save updates the lead profile after your review. Send to Chat uses the reviewed values.
         </div>
       </div>
   `;
+  attachSummaryActionHandlers();
+  summaryModal.classList.add('active');
+}
+
+function attachSummaryActionHandlers() {
+  const saveButton = document.getElementById('summary-save-btn');
+  if (saveButton) {
+    saveButton.onclick = () => {
+      saveButton.disabled = true;
+      saveEditedSummaryFields()
+        .catch((err) => {
+          displaySummary(latestSummary, { saveError: err.message });
+        });
+    };
+  }
+
   const button = document.getElementById('summary-send-btn');
   if (button) {
     button.onclick = () => {
+      if (modalBody.querySelector('.summary-value-input')) {
+        latestSummary.customer_info = readEditedSummaryFields();
+      }
+
       sendSummaryToChat().catch((err) => {
         alert(`Failed to send summary to chat: ${err.message}`);
       });
     };
   }
-  summaryModal.classList.add('active');
 }
 
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function escapeAttribute(text) {
+  return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }

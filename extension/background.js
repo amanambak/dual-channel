@@ -9,13 +9,14 @@ let targetTabId = null;
 let currentSessionId = null;
 let captureMode = 'gmeet';
 
-function pushLeadContextToOffscreen({ leadId, facts, missingFields }) {
+function pushLeadContextToOffscreen({ leadId, facts, missingFields, profile }) {
   chrome.runtime.sendMessage({
     type: 'SET_SESSION_LEAD_CONTEXT',
     offscreen: true,
     leadId: leadId || null,
     leadFacts: facts || null,
     leadMissingFields: missingFields || null,
+    leadProfile: profile || null,
   }).catch(() => {});
 }
 
@@ -325,20 +326,126 @@ async function buildBackendLeadContext({
   if (!response.ok) {
     throw new Error(`Lead context API failed with HTTP ${response.status}`);
   }
-  return response.json();
+  const profile = await response.json();
+  return normalizeBackendLeadProfile(profile, {
+    fallbackLeadId: leadId,
+    fallbackDetail: detail,
+    fallbackDreDocuments: dreDocuments,
+    fallbackDreDocumentError: dreDocumentError,
+  });
 }
 
-async function persistLeadContext({ detail, leadId, facts, missingFields, dreDocuments, dreDocumentError, leadContext }) {
+function normalizeBackendLeadProfile(profile, fallback = {}) {
+  const universalProfile = profile?.profile || profile?.lead_profile || profile?.universal_profile || null;
+  const leadContext = profile?.lead_context || profile || null;
+  const displayFacts = universalProfile?.display || profile?.lead_facts || leadContext?.facts || null;
+  return {
+    leadId: universalProfile?.lead_id || profile?.lead_id || leadContext?.lead_id || fallback.fallbackLeadId || null,
+    detail: universalProfile?.raw || profile?.lead_detail || leadContext?.lead_detail || fallback.fallbackDetail || null,
+    facts: displayFacts,
+    rawFacts: universalProfile?.raw_facts || profile?.lead_raw_facts || null,
+    missingFields: profile?.lead_missing_fields || null,
+    dreDocuments: fallback.fallbackDreDocuments || null,
+    dreDocumentError: leadContext?.document_error || fallback.fallbackDreDocumentError || null,
+    documentStatus: leadContext?.document_status || null,
+    leadContext,
+    profile: universalProfile,
+  };
+}
+
+async function persistLeadContext({ detail, leadId, facts, rawFacts, missingFields, dreDocuments, dreDocumentError, leadContext, profile }) {
   await chrome.storage.local.set({
+    currentLeadProfile: profile || null,
     currentLeadDetail: detail || null,
     currentLeadId: leadId || leadContext?.lead_id || null,
     currentLeadFacts: facts || leadContext?.facts || null,
+    currentLeadRawFacts: rawFacts || profile?.raw_facts || null,
     currentLeadMissingFields: missingFields || null,
     currentLeadContext: leadContext || null,
     currentLeadDocumentStatus: leadContext?.document_status || null,
     currentLeadDreDocuments: dreDocuments || null,
     currentLeadDreDocumentError: leadContext?.document_error || dreDocumentError || null,
   });
+}
+
+async function mergeExtractedFieldsIntoStoredLead(fields) {
+  if (!fields || typeof fields !== 'object' || Object.keys(fields).length === 0) {
+    return null;
+  }
+
+  const stored = await chrome.storage.local.get([
+    'currentLeadDetail',
+    'currentLeadId',
+    'currentLeadFacts',
+    'currentLeadProfile',
+    'currentLeadDreDocuments',
+    'currentLeadDreDocumentError',
+    'currentLeadDocumentStatus',
+  ]);
+  const response = await fetch(`${CONFIG.BACKEND_HTTP_URL}/api/lead/merge-extracted`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      lead_id: stored.currentLeadId || null,
+      profile: stored.currentLeadProfile || null,
+      lead_detail: stored.currentLeadDetail || null,
+      lead_facts: stored.currentLeadFacts || null,
+      lead_dre_documents: stored.currentLeadDreDocuments || null,
+      lead_dre_document_error: stored.currentLeadDreDocumentError || null,
+      lead_document_status: stored.currentLeadDocumentStatus || null,
+      extracted_fields: fields,
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Lead merge API failed with HTTP ${response.status}`);
+  }
+  const merged = await response.json();
+  const leadContext = merged.lead_context || null;
+  const normalized = normalizeBackendLeadProfile(merged);
+  await persistLeadContext({
+    detail: normalized.detail,
+    leadId: merged.lead_id || leadContext?.lead_id || stored.currentLeadId || null,
+    facts: normalized.facts,
+    rawFacts: normalized.rawFacts,
+    missingFields: normalized.missingFields,
+    dreDocuments: stored.currentLeadDreDocuments || null,
+    dreDocumentError: leadContext?.document_error || stored.currentLeadDreDocumentError || null,
+    leadContext,
+    profile: normalized.profile,
+  });
+  pushLeadContextToOffscreen({
+    leadId: merged.lead_id || leadContext?.lead_id || stored.currentLeadId || null,
+    facts: normalized.facts,
+    missingFields: normalized.missingFields,
+    profile: normalized.profile,
+  });
+  chrome.runtime.sendMessage({
+    type: 'LEAD_CONTEXT_UPDATED',
+    leadId: merged.lead_id || leadContext?.lead_id || stored.currentLeadId || null,
+    detail: normalized.detail,
+    facts: normalized.facts,
+    missingFields: normalized.missingFields,
+    leadContext,
+    profile: normalized.profile,
+  }).catch(() => {});
+  return { ...merged, leadContext };
+}
+
+function buildLeadProfileResponse(result) {
+  const profile = result?.profile || result?.lead_profile || null;
+  const leadContext = result?.leadContext || result?.lead_context || null;
+  return {
+    success: true,
+    leadId: profile?.lead_id || result?.lead_id || leadContext?.lead_id || null,
+    detail: profile?.raw || result?.lead_detail || leadContext?.lead_detail || null,
+    facts: profile?.display || result?.lead_facts || leadContext?.facts || null,
+    rawFacts: profile?.raw_facts || result?.lead_raw_facts || null,
+    missingFields: result?.lead_missing_fields || null,
+    leadContext,
+    profile,
+    documentStatus: leadContext?.document_status || null,
+    dreDocumentError: leadContext?.document_error || null,
+  };
 }
 
 async function fetchAndStoreLeadDetail(leadId) {
@@ -355,47 +462,53 @@ async function fetchAndStoreLeadDetail(leadId) {
     'auth token preview': maskAuthTokenForLog(accessToken),
   });
   const result = await LeadDetailApi.fetchLeadDetail({ leadId: normalizedLeadId, token: accessToken });
-  const facts = LeadDetailApi.buildLeadFacts(result.detail);
-  const missingFields = LeadDetailApi.buildLeadMissingFields(result.detail);
   const dreResult = await fetchCustomerDreDocuments({
     detail: result.detail,
     leadId: result.leadId,
     token: accessToken,
   });
-  const leadContext = await buildBackendLeadContext({
+  const profile = await buildBackendLeadContext({
     leadId: result.leadId,
     detail: result.detail,
     dreDocuments: dreResult.dreDocuments,
     dreDocumentError: dreResult.error,
-    leadFacts: facts,
   });
   console.group('[LeadDebug][background] fetched lead detail');
-  console.log('leadId', result.leadId);
-  console.log('detail keys', result.detail ? Object.keys(result.detail).slice(0, 30) : []);
-  console.log('facts count', Object.keys(facts).length);
-  console.log('facts sample', Object.fromEntries(Object.entries(facts).slice(0, 30)));
-  console.log('missing count', missingFields.length);
-  console.log('missing sample', missingFields.slice(0, 30));
+  console.log('leadId', profile.leadId || result.leadId);
+  console.log('detail keys', profile.detail ? Object.keys(profile.detail).slice(0, 30) : []);
+  console.log('facts count', profile.facts ? Object.keys(profile.facts).length : 0);
+  console.log('facts sample', profile.facts ? Object.fromEntries(Object.entries(profile.facts).slice(0, 30)) : {});
+  console.log('missing count', Array.isArray(profile.missingFields) ? profile.missingFields.length : 0);
+  console.log('missing sample', Array.isArray(profile.missingFields) ? profile.missingFields.slice(0, 30) : []);
   console.groupEnd();
   await persistLeadContext({
-    detail: result.detail,
-    leadId: result.leadId,
-    facts,
-    missingFields,
+    detail: profile.detail,
+    leadId: profile.leadId || result.leadId,
+    facts: profile.facts,
+    rawFacts: profile.rawFacts,
+    missingFields: profile.missingFields,
     dreDocuments: dreResult.dreDocuments,
-    dreDocumentError: dreResult.error,
-    leadContext,
+    dreDocumentError: profile.dreDocumentError || dreResult.error,
+    leadContext: profile.leadContext,
+    profile: profile.profile,
   });
-  pushLeadContextToOffscreen({ leadId: result.leadId, facts, missingFields });
+  pushLeadContextToOffscreen({
+    leadId: profile.leadId || result.leadId,
+    facts: profile.facts,
+    missingFields: profile.missingFields,
+    profile: profile.profile,
+  });
   return {
-    leadId: leadContext?.lead_id || result.leadId,
-    detail: result.detail,
-    facts,
-    missingFields,
+    leadId: profile.leadId || result.leadId,
+    detail: profile.detail,
+    facts: profile.facts,
+    rawFacts: profile.rawFacts,
+    missingFields: profile.missingFields,
     dreDocuments: dreResult.dreDocuments,
-    dreDocumentError: leadContext?.document_error || dreResult.error,
-    leadContext,
-    documentStatus: leadContext?.document_status || null,
+    dreDocumentError: profile.dreDocumentError || dreResult.error,
+    leadContext: profile.leadContext,
+    documentStatus: profile.documentStatus || null,
+    profile: profile.profile,
   };
 }
 
@@ -405,46 +518,58 @@ async function loadLeadDetailForChat(message, stored) {
   const hasRequestedDifferentLead = requestedLeadId && storedLeadId && String(requestedLeadId) !== String(storedLeadId);
 
   if (!hasRequestedDifferentLead && (message.lead_context || message.leadContext || stored.currentLeadContext)) {
+    const profile = message.profile || message.lead_profile || message.leadProfile || stored.currentLeadProfile || null;
     const leadContext = message.lead_context || message.leadContext || stored.currentLeadContext;
-    const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || leadContext?.lead_detail || null;
-    const facts = message.lead_facts || message.leadFacts || stored.currentLeadFacts || leadContext?.facts || null;
+    const detail = profile?.raw || message.lead_detail || message.leadDetail || stored.currentLeadDetail || leadContext?.lead_detail || null;
+    const facts = profile?.display || message.lead_facts || message.leadFacts || stored.currentLeadFacts || leadContext?.facts || null;
     return {
-      leadId: leadContext?.lead_id || requestedLeadId,
+      leadId: profile?.lead_id || leadContext?.lead_id || requestedLeadId,
       detail,
       facts,
-      missingFields: message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
+      rawFacts: profile?.raw_facts || stored.currentLeadRawFacts || null,
+      missingFields: profile?.missing_fields || message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
       dreDocuments: message.lead_dre_documents || message.leadDreDocuments || stored.currentLeadDreDocuments || null,
       dreDocumentError: message.lead_dre_document_error || message.leadDreDocumentError || stored.currentLeadDreDocumentError || leadContext?.document_error || null,
       documentStatus: message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || leadContext?.document_status || null,
       leadContext,
+      profile,
     };
   }
 
   if (!hasRequestedDifferentLead && (message.lead_detail || message.leadDetail || stored.currentLeadDetail)) {
     const detail = message.lead_detail || message.leadDetail || stored.currentLeadDetail || null;
-    const facts = LeadDetailApi.buildLeadFacts(detail);
-    const missingFields = LeadDetailApi.buildLeadMissingFields(detail);
     const dreDocuments = message.lead_dre_documents || message.leadDreDocuments || stored.currentLeadDreDocuments || null;
     const dreDocumentError = message.lead_dre_document_error || message.leadDreDocumentError || stored.currentLeadDreDocumentError || null;
     const documentStatus = message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || null;
-    const leadContext = await buildBackendLeadContext({
+    const profile = await buildBackendLeadContext({
       leadId: requestedLeadId,
       detail,
       dreDocuments,
       dreDocumentError,
       leadDocumentStatus: documentStatus,
-      leadFacts: facts,
     });
-    await persistLeadContext({ detail, leadId: requestedLeadId, facts, missingFields, dreDocuments, dreDocumentError, leadContext });
-    return {
-      leadId: leadContext?.lead_id || requestedLeadId,
-      detail,
-      facts,
-      missingFields,
+    await persistLeadContext({
+      detail: profile.detail,
+      leadId: profile.leadId || requestedLeadId,
+      facts: profile.facts,
+      rawFacts: profile.rawFacts,
+      missingFields: profile.missingFields,
       dreDocuments,
-      dreDocumentError: leadContext?.document_error || dreDocumentError,
-      documentStatus: leadContext?.document_status || documentStatus,
-      leadContext,
+      dreDocumentError: profile.dreDocumentError || dreDocumentError,
+      leadContext: profile.leadContext,
+      profile: profile.profile,
+    });
+    return {
+      leadId: profile.leadId || requestedLeadId,
+      detail: profile.detail,
+      facts: profile.facts,
+      rawFacts: profile.rawFacts,
+      missingFields: profile.missingFields,
+      dreDocuments,
+      dreDocumentError: profile.dreDocumentError || dreDocumentError,
+      documentStatus: profile.documentStatus || documentStatus,
+      leadContext: profile.leadContext,
+      profile: profile.profile,
     };
   }
 
@@ -453,7 +578,7 @@ async function loadLeadDetailForChat(message, stored) {
     const documentStatus = message.lead_document_status || message.leadDocumentStatus || stored.currentLeadDocumentStatus || null;
     const dreDocuments = message.lead_dre_documents || message.leadDreDocuments || stored.currentLeadDreDocuments || null;
     const dreDocumentError = message.lead_dre_document_error || message.leadDreDocumentError || stored.currentLeadDreDocumentError || null;
-    const leadContext = await buildBackendLeadContext({
+    const profile = await buildBackendLeadContext({
       leadId: requestedLeadId,
       detail: null,
       dreDocuments,
@@ -462,23 +587,27 @@ async function loadLeadDetailForChat(message, stored) {
       leadFacts: candidateFacts,
     });
     await persistLeadContext({
-      detail: null,
-      leadId: requestedLeadId,
-      facts: candidateFacts,
-      missingFields: message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
+      detail: profile.detail,
+      leadId: profile.leadId || requestedLeadId,
+      facts: profile.facts || candidateFacts,
+      rawFacts: profile.rawFacts,
+      missingFields: profile.missingFields || message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
       dreDocuments,
-      dreDocumentError,
-      leadContext,
+      dreDocumentError: profile.dreDocumentError || dreDocumentError,
+      leadContext: profile.leadContext,
+      profile: profile.profile,
     });
     return {
-      leadId: leadContext?.lead_id || requestedLeadId,
-      detail: null,
-      facts: candidateFacts,
-      missingFields: message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
+      leadId: profile.leadId || requestedLeadId,
+      detail: profile.detail,
+      facts: profile.facts || candidateFacts,
+      rawFacts: profile.rawFacts,
+      missingFields: profile.missingFields || message.lead_missing_fields || message.leadMissingFields || stored.currentLeadMissingFields || null,
       dreDocuments,
-      dreDocumentError: leadContext?.document_error || dreDocumentError,
-      documentStatus: leadContext?.document_status || documentStatus,
-      leadContext,
+      dreDocumentError: profile.dreDocumentError || dreDocumentError,
+      documentStatus: profile.documentStatus || documentStatus,
+      leadContext: profile.leadContext,
+      profile: profile.profile,
     };
   }
 
@@ -488,13 +617,15 @@ async function loadLeadDetailForChat(message, stored) {
 
   return {
     leadId: stored.currentLeadId || null,
-    detail: stored.currentLeadDetail || null,
-    facts: stored.currentLeadFacts || null,
-    missingFields: stored.currentLeadMissingFields || null,
+    detail: stored.currentLeadProfile?.raw || stored.currentLeadDetail || null,
+    facts: stored.currentLeadProfile?.display || stored.currentLeadFacts || null,
+    rawFacts: stored.currentLeadProfile?.raw_facts || stored.currentLeadRawFacts || null,
+    missingFields: stored.currentLeadProfile?.missing_fields || stored.currentLeadMissingFields || null,
     dreDocuments: stored.currentLeadDreDocuments || null,
     dreDocumentError: stored.currentLeadDreDocumentError || null,
     documentStatus: stored.currentLeadDocumentStatus || null,
     leadContext: stored.currentLeadContext || null,
+    profile: stored.currentLeadProfile || null,
   };
 }
 
@@ -502,7 +633,9 @@ function handleChatSend(message, sender, sendResponse) {
   chrome.storage.local.get([
     'currentLeadDetail',
     'currentLeadId',
+    'currentLeadProfile',
     'currentLeadFacts',
+    'currentLeadRawFacts',
     'currentLeadMissingFields',
     'currentLeadContext',
     'currentLeadDocumentStatus',
@@ -523,6 +656,7 @@ function handleChatSend(message, sender, sendResponse) {
         lead_dre_document_error: lead.dreDocumentError || null,
         lead_document_status: lead.documentStatus || null,
         lead_context: lead.leadContext || null,
+        profile: lead.profile || null,
       };
 
       console.group('[LeadDebug][background] /api/chat payload');
@@ -572,11 +706,23 @@ function handleGetLeadDetail(message, sender, sendResponse) {
         success: true,
         leadId: result.leadId,
         detail: result.detail,
+        facts: result.facts,
         missingFields: result.missingFields,
         leadContext: result.leadContext || null,
         documentStatus: result.documentStatus || null,
         dreDocumentError: result.dreDocumentError || null,
       });
+    })
+    .catch((err) => {
+      sendResponse({ error: err.message });
+    });
+  return true;
+}
+
+function handleUpdateLeadProfileFields(message, sender, sendResponse) {
+  mergeExtractedFieldsIntoStoredLead(message.fields || {})
+    .then((result) => {
+      sendResponse(result ? buildLeadProfileResponse(result) : { success: true, skipped: true });
     })
     .catch((err) => {
       sendResponse({ error: err.message });
@@ -590,11 +736,12 @@ function handleSessionReady(message) {
       type: 'SESSION_STATUS_CHANGED',
       sessionId: currentSessionId
     }).catch(() => {});
-    chrome.storage.local.get(['currentLeadId', 'currentLeadFacts', 'currentLeadMissingFields']).then((stored) => {
+    chrome.storage.local.get(['currentLeadId', 'currentLeadFacts', 'currentLeadMissingFields', 'currentLeadProfile']).then((stored) => {
       pushLeadContextToOffscreen({
         leadId: stored.currentLeadId || null,
         facts: stored.currentLeadFacts || null,
         missingFields: stored.currentLeadMissingFields || null,
+        profile: stored.currentLeadProfile || null,
       });
     }).catch(() => {});
   });
@@ -658,6 +805,14 @@ function handleAiResponseDone(message) {
   return false;
 }
 
+function handleExtractedFieldsUpdate(message) {
+  chrome.runtime.sendMessage({
+    type: 'EXTRACTED_FIELDS_READY_FOR_REVIEW',
+    fields: message.fields || {},
+  }).catch(() => {});
+  return false;
+}
+
 function handleApiError(message) {
   chrome.runtime.sendMessage({
     type: 'API_ERROR',
@@ -676,6 +831,7 @@ const MESSAGE_HANDLERS = {
   CLEAR_MESSAGES: handleClearMessages,
   GENERATE_SUMMARY: handleGenerateSummary,
   SUMMARY_CHAT_SEND: handleSummaryChat,
+  UPDATE_LEAD_PROFILE_FIELDS: handleUpdateLeadProfileFields,
   CHAT_SEND: handleChatSend,
   GET_LEAD_DETAIL: handleGetLeadDetail,
   // Relay messages from offscreen/content scripts
@@ -685,6 +841,7 @@ const MESSAGE_HANDLERS = {
   UTTERANCE_COMMITTED: handleUtteranceCommitted,
   AI_RESPONSE_CHUNK: handleAiResponseChunk,
   AI_RESPONSE_DONE: handleAiResponseDone,
+  EXTRACTED_FIELDS_UPDATE: handleExtractedFieldsUpdate,
   API_ERROR: handleApiError,
 };
 

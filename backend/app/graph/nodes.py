@@ -8,6 +8,7 @@ from app.services.category_router import route_category as route_workflow_catego
 from app.services.contextual_extraction import normalize_contextual_extracted_fields
 from app.services.field_resolver import build_resolved_field_state
 from app.services.field_resolver import resolve_extracted_fields
+from app.services.lead_detail_context import find_direct_lead_detail_answer
 from app.services.next_action import select_next_action as select_workflow_next_action
 from app.services.workflow_state import compute_workflow_state as compute_workflow
 
@@ -63,7 +64,7 @@ def build_turn_nodes(llm: LLMService):
         route_payload = route.to_dict()
         route_payload["previous_category"] = state.get("active_category")
 
-        if route.needs_llm:
+        if _should_classify_category(route_payload, expected_field=state.get("expected_field")):
             try:
                 classified = await llm.classify_category(
                     utterance=state.get("utterance", ""),
@@ -111,6 +112,24 @@ def build_turn_nodes(llm: LLMService):
             return {}
 
         writer = get_stream_writer()
+        direct_answer = find_direct_lead_detail_answer(
+            state.get("utterance", ""),
+            _combined_lead_sources(
+                state.get("lead_detail", {}),
+                state.get("lead_facts", {}),
+            ),
+        )
+        if direct_answer:
+            full_text = f"[SUGGESTION] {direct_answer}"
+            writer(
+                {
+                    "type": "ai_chunk",
+                    "utterance_id": state.get("utterance_id"),
+                    "text": full_text,
+                }
+            )
+            return {"raw_response": full_text}
+
         full_text = ""
         buffered_chunks: list[str] = []
         started_streaming = False
@@ -186,3 +205,33 @@ def build_turn_nodes(llm: LLMService):
         "select_next_action": select_next_action,
         "generate_response": generate_response,
     }
+
+
+def _combined_lead_sources(lead_detail: dict | None, lead_facts: dict | None) -> dict:
+    combined: dict = {}
+    if isinstance(lead_facts, dict):
+        combined.update(lead_facts)
+    if isinstance(lead_detail, dict):
+        combined.update(lead_detail)
+    return combined
+
+
+def _should_classify_category(
+    route_payload: dict,
+    *,
+    expected_field: str | None,
+) -> bool:
+    if expected_field:
+        return False
+    if not route_payload.get("needs_llm"):
+        return False
+    scores = route_payload.get("scores") or {}
+    if not isinstance(scores, dict) or not scores:
+        return False
+    ranked = sorted(
+        (float(score or 0.0) for score in scores.values()),
+        reverse=True,
+    )
+    top_score = ranked[0]
+    second_score = ranked[1] if len(ranked) > 1 else 0.0
+    return top_score < 0.75 and (top_score - second_score) < 0.20

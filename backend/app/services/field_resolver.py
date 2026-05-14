@@ -148,6 +148,10 @@ def build_resolved_field_state(
     )
     field_state = merge_field_values(
         field_state,
+        _derive_lead_detail_fields(lead_detail),
+    )
+    field_state = merge_field_values(
+        field_state,
         resolve_extracted_fields(extracted_fields, registry=registry, source="realtime"),
     )
     return field_state
@@ -160,6 +164,32 @@ def field_values_as_simple_dict(field_state: dict[str, Any] | None) -> dict[str,
         if value.get("status") == "filled":
             simple[field_id] = value.get("value")
     return simple
+
+
+def _derive_lead_detail_fields(
+    lead_detail: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(lead_detail, dict) or "co_applicant" not in lead_detail:
+        return {}
+
+    co_applicant = lead_detail.get("co_applicant")
+    has_co_applicant = bool(co_applicant)
+    return {
+        "has_co_applicant": FieldValue(
+            field_id="has_co_applicant",
+            value="yes" if has_co_applicant else "no",
+            source="derived",
+            status="filled",
+            raw_values=[
+                {
+                    "key": "co_applicant",
+                    "value": co_applicant,
+                    "source": "derived",
+                }
+            ],
+            resolved_from="co_applicant",
+        ).to_dict()
+    }
 
 
 def _coerce_field_value(field_id: str, raw_value: Any) -> dict[str, Any]:

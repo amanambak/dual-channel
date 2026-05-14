@@ -47,12 +47,13 @@ class SessionRuntime:
         self.model_override: str | None = None
         self.finalized_segments = False
         self.finalize_task: asyncio.Task | None = None
-        self.finalize_delay_seconds = 1.0
+        self.finalize_delay_seconds = 0.3
         self.pending_incomplete_utterance = ""
         self.current_segment_confidences: list[float] = []
         self.last_llm_invoked_at = 0.0
         self.min_llm_interval_seconds = 3.0
         self.last_should_extract = False
+        self.active_reply_utterance_id: str | None = None
 
     async def run(self) -> None:
         await session_transport.run(self)

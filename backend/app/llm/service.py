@@ -506,6 +506,42 @@ def is_no_refresh_confirmation(message: str) -> bool:
     return bool(tokens & {"no", "same"}) or "not updated" in normalized or "no refresh" in normalized
 
 
+def should_use_lead_query_planner(message: str) -> bool:
+    normalized = _normalize_intent_text(message)
+    if not normalized:
+        return False
+    if is_next_step_query(message):
+        return True
+    tokens = set(normalized.split())
+    if tokens & {"missing", "pending", "empty", "blank", "null"}:
+        return True
+    lead_field_terms = {
+        "amount",
+        "bank",
+        "cibil",
+        "city",
+        "company",
+        "customer",
+        "dob",
+        "email",
+        "followup",
+        "details",
+        "hierarchy",
+        "lead",
+        "loan",
+        "mobile",
+        "name",
+        "pan",
+        "partner",
+        "property",
+        "rm",
+        "salary",
+        "status",
+        "tenure",
+    }
+    return bool(tokens & lead_field_terms)
+
+
 PRIORITY_MISSING_SCOPE_HINTS = (
     ("property", "property"),
     ("credit", "credit"),
@@ -1000,7 +1036,7 @@ class LLMService:
                 "previous_next_step": previous_next_step,
             }
 
-        if searchable_lead_detail:
+        if searchable_lead_detail and should_use_lead_query_planner(message):
             plan_start = time.perf_counter()
             lead_plan = build_deterministic_lead_query_plan(message)
             if lead_plan is None:
@@ -1052,6 +1088,12 @@ class LLMService:
                 lead_id,
                 lead_plan,
                 timings["lead_plan_ms"],
+            )
+        elif searchable_lead_detail:
+            logger.info(
+                "Lead chat planner skipped for non-lead-detail fallback: lead_id=%s message_len=%d",
+                lead_id,
+                len(message),
             )
 
         # 1. Retrieve relevant context

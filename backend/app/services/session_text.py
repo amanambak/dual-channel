@@ -1,7 +1,70 @@
 from dataclasses import dataclass
+import re
+import time
 
 from app.models.session import SessionState
 from app.services.text_utils import normalize_text
+
+
+FILLER_UTTERANCES = {
+    "achha",
+    "acha",
+    "haan",
+    "han",
+    "hmm",
+    "ji",
+    "ok",
+    "okay",
+    "theek",
+    "thik",
+    "yes",
+}
+
+GREETING_UTTERANCES = {
+    "good afternoon",
+    "good evening",
+    "good morning",
+    "hello",
+    "hey",
+    "hi",
+    "namaskar",
+    "namaste",
+}
+
+EXTRACTION_SIGNAL_KEYWORDS = {
+    "address",
+    "amount",
+    "bank",
+    "business",
+    "cibil",
+    "city",
+    "company",
+    "dob",
+    "emi",
+    "income",
+    "loan",
+    "mobile",
+    "name",
+    "pan",
+    "pancard",
+    "profession",
+    "property",
+    "salary",
+    "state",
+    "tenure",
+}
+
+REPLY_SIGNAL_KEYWORDS = EXTRACTION_SIGNAL_KEYWORDS | {
+    "apply",
+    "charges",
+    "document",
+    "documents",
+    "fee",
+    "interest",
+    "process",
+    "rate",
+    "roi",
+}
 
 
 @dataclass(frozen=True)
@@ -24,11 +87,16 @@ def get_average_confidence(values: list[float]) -> float:
 
 
 def looks_like_noise_or_filler(normalized: str) -> bool:
-    return False
+    return normalized in FILLER_UTTERANCES
 
 
 def looks_like_transcription_instruction_leak(text: str) -> bool:
-    return False
+    normalized = normalize_text(text)
+    return bool(
+        "transcribe" in normalized
+        and ("home loan" in normalized or "homeloan" in normalized)
+        and ("hinglish" in normalized or "hindi" in normalized)
+    )
 
 
 def should_capture_final_segment(transcript: str, confidence: float | None) -> bool:
@@ -39,6 +107,7 @@ def should_run_llm_extraction(
     utterance: str,
     average_confidence: float,
     speaker: str | None,
+    expected_field: str | None = None,
 ) -> bool:
     if speaker == "1":
         return False
@@ -46,25 +115,54 @@ def should_run_llm_extraction(
     normalized = normalize_text(utterance)
     if not normalized:
         return False
-    if normalized in {
-        "hello",
-        "hi",
-        "hey",
-        "namaste",
-        "namaskar",
-        "good morning",
-        "good afternoon",
-        "good evening",
-    }:
+    if looks_like_transcription_instruction_leak(utterance):
         return False
+    if normalized in GREETING_UTTERANCES:
+        return False
+    if looks_like_noise_or_filler(normalized) and not expected_field:
+        return False
+    if expected_field:
+        return True
 
-    return True
+    tokens = set(normalized.split())
+    if tokens & EXTRACTION_SIGNAL_KEYWORDS:
+        return True
+    if re.search(r"\b\d+(?:[.,]\d+)?\s*(lakh|lac|cr|crore|k|thousand|rs|rupees?)?\b", normalized):
+        return True
+    if len(tokens) >= 3 and not looks_like_noise_or_filler(normalized):
+        return True
+
+    return False
 
 
 def should_invoke_llm(
-    utterance: str, average_confidence: float, last_llm_invoked_at: float, cooldown: float
+    utterance: str,
+    average_confidence: float,
+    last_llm_invoked_at: float,
+    cooldown: float,
+    expected_field: str | None = None,
 ) -> bool:
-    return bool(str(utterance or "").strip())
+    normalized = normalize_text(utterance)
+    if not normalized:
+        return False
+    if looks_like_transcription_instruction_leak(utterance):
+        return False
+    if normalized in GREETING_UTTERANCES:
+        return False
+    if looks_like_noise_or_filler(normalized) and not expected_field:
+        return False
+    if cooldown > 0 and last_llm_invoked_at > 0:
+        if time.monotonic() - last_llm_invoked_at < cooldown:
+            return False
+
+    tokens = set(normalized.split())
+    if expected_field:
+        return True
+    if tokens & REPLY_SIGNAL_KEYWORDS:
+        return True
+    if "?" in utterance:
+        return True
+    return len(tokens) >= 4
 
 
 def decide_turn_action(
@@ -73,6 +171,7 @@ def decide_turn_action(
     speaker: str | None,
     last_llm_invoked_at: float,
     cooldown: float,
+    expected_field: str | None = None,
 ) -> TurnActionDecision:
     if not str(utterance or "").strip():
         return TurnActionDecision(False, False, "empty_or_too_short")
@@ -80,12 +179,18 @@ def decide_turn_action(
     if speaker == "1":
         return TurnActionDecision(False, False, "agent_context_only")
 
-    run_extraction = should_run_llm_extraction(utterance, average_confidence, speaker)
+    run_extraction = should_run_llm_extraction(
+        utterance,
+        average_confidence,
+        speaker,
+        expected_field=expected_field,
+    )
     run_reply = should_invoke_llm(
         utterance,
         average_confidence,
         last_llm_invoked_at,
         cooldown,
+        expected_field=expected_field,
     )
 
     if run_extraction and run_reply:

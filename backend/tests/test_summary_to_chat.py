@@ -346,6 +346,42 @@ class SummaryToChatRouteTest(unittest.IsolatedAsyncioTestCase):
             fake_rag.hybrid_search.assert_not_awaited()
             service.generate_text.assert_not_awaited()
 
+    async def test_chat_answers_lead_name_from_loaded_customer_name(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+
+            reply = await service.generate_chat_reply(
+                "what is lead name?",
+                lead_id=667,
+                lead_facts={"customer.first_name": "Gautam", "customer.last_name": "Gambhir"},
+            )
+
+            self.assertEqual(reply, "Lead name: Gautam Gambhir")
+            fake_rag.hybrid_search.assert_not_awaited()
+
+    async def test_chat_answers_hinglish_customer_name_from_loaded_data(self):
+        with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
+            fake_rag = mock_rag_cls.return_value
+            fake_rag.hybrid_search = AsyncMock(return_value=[])
+
+            from app.llm.service import LLMService
+
+            service = LLMService()
+
+            reply = await service.generate_chat_reply(
+                "Sir mera Naam kya hai?",
+                lead_id=667,
+                lead_facts={"customer.first_name": "Aman", "customer.last_name": "Paswan"},
+            )
+
+            self.assertEqual(reply, "Aapka naam Aman Paswan hai.")
+            fake_rag.hybrid_search.assert_not_awaited()
+
     async def test_customer_name_does_not_use_generic_name_field(self):
         with patch("app.llm.service.RAGService", autospec=True) as mock_rag_cls:
             fake_rag = mock_rag_cls.return_value

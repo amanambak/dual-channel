@@ -26,7 +26,7 @@ def test_agent_turn_does_not_trigger_extraction_or_reply():
     assert decision.reason == "agent_context_only"
 
 
-def test_customer_info_runs_extraction_and_reply_inside_old_cooldown_window():
+def test_customer_info_runs_extraction_but_skips_reply_inside_cooldown_window():
     decision = decide_turn_action(
         utterance="loan amount 25 lakh cibil score 750",
         average_confidence=0.55,
@@ -36,8 +36,8 @@ def test_customer_info_runs_extraction_and_reply_inside_old_cooldown_window():
     )
 
     assert decision.run_extraction is True
-    assert decision.run_reply is True
-    assert decision.reason == "customer_extract_and_reply"
+    assert decision.run_reply is False
+    assert decision.reason == "customer_extract_only"
 
 
 def test_customer_info_runs_extraction_and_reply_outside_cooldown():
@@ -54,7 +54,7 @@ def test_customer_info_runs_extraction_and_reply_outside_cooldown():
     assert decision.reason == "customer_extract_and_reply"
 
 
-def test_filler_turn_still_triggers_raw_customer_processing():
+def test_filler_turn_skips_llm_processing():
     decision = decide_turn_action(
         utterance="haan",
         average_confidence=0.9,
@@ -63,12 +63,12 @@ def test_filler_turn_still_triggers_raw_customer_processing():
         cooldown=3.0,
     )
 
-    assert decision.run_extraction is True
-    assert decision.run_reply is True
-    assert decision.reason == "customer_extract_and_reply"
+    assert decision.run_extraction is False
+    assert decision.run_reply is False
+    assert decision.reason == "customer_no_action"
 
 
-def test_customer_greeting_skips_extraction_but_still_gets_reply():
+def test_customer_greeting_skips_extraction_and_reply():
     decision = decide_turn_action(
         utterance="Hello",
         average_confidence=0.75,
@@ -78,8 +78,23 @@ def test_customer_greeting_skips_extraction_but_still_gets_reply():
     )
 
     assert decision.run_extraction is False
+    assert decision.run_reply is False
+    assert decision.reason == "customer_no_action"
+
+
+def test_short_expected_field_answer_still_runs_extraction_and_reply():
+    decision = decide_turn_action(
+        utterance="Noida",
+        average_confidence=0.9,
+        speaker="0",
+        last_llm_invoked_at=0.0,
+        cooldown=3.0,
+        expected_field="property_city",
+    )
+
+    assert decision.run_extraction is True
     assert decision.run_reply is True
-    assert decision.reason == "customer_reply_only"
+    assert decision.reason == "customer_extract_and_reply"
 
 
 class AgentTranscriptionTest(unittest.TestCase):
@@ -218,10 +233,10 @@ class TranscriptHygieneTest(unittest.TestCase):
             "brief noise or cross-talk."
         )
 
-        self.assertFalse(looks_like_transcription_instruction_leak(leaked_prompt))
+        self.assertTrue(looks_like_transcription_instruction_leak(leaked_prompt))
         self.assertTrue(should_capture_final_segment(leaked_prompt, 0.95))
 
-    def test_transcription_prompt_leak_still_triggers_raw_customer_processing(self):
+    def test_transcription_prompt_leak_skips_llm_processing(self):
         decision = decide_turn_action(
             utterance=(
                 "Transcribe Indian home-loan calls accurately. Expect Hindi, "
@@ -233,6 +248,6 @@ class TranscriptHygieneTest(unittest.TestCase):
             cooldown=3.0,
         )
 
-        self.assertTrue(decision.run_extraction)
-        self.assertTrue(decision.run_reply)
-        self.assertEqual(decision.reason, "customer_extract_and_reply")
+        self.assertFalse(decision.run_extraction)
+        self.assertFalse(decision.run_reply)
+        self.assertEqual(decision.reason, "customer_no_action")

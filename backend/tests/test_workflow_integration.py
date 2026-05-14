@@ -19,6 +19,74 @@ def resolved_state(**fields):
 
 
 class WorkflowIntegrationTest(unittest.TestCase):
+    def test_backend_merges_extracted_fields_into_lead_detail_from_registry(self):
+        from app.services.lead_profile_merge import merge_extracted_fields_into_lead
+
+        result = merge_extracted_fields_into_lead(
+            lead_id=668,
+            lead_detail={
+                "id": 668,
+                "customer": {"first_name": "", "mobile": "9999999999"},
+                "co_applicant": [{"ca_first_name": ""}],
+            },
+            extracted_fields={
+                "customer_first_name": "Aman",
+                "coapplicant_first_name": "Neha",
+                "cibil_score": "760",
+            },
+        )
+
+        self.assertEqual(result["lead_detail"]["customer"]["first_name"], "Aman")
+        self.assertEqual(result["lead_detail"]["co_applicant"][0]["ca_first_name"], "Neha")
+        self.assertEqual(result["lead_detail"]["lead_details"]["cibil_score"], "760")
+        self.assertEqual(result["lead_facts"]["customer.first_name"], "Aman")
+        self.assertEqual(result["lead_facts"]["co_applicant[0].ca_first_name"], "Neha")
+        self.assertEqual(result["lead_facts"]["lead_details.cibil_score"], "760")
+        self.assertFalse(
+            any(item.get("path") == "customer.first_name" for item in result["lead_missing_fields"])
+        )
+
+    def test_universal_profile_maps_ids_for_display_without_changing_raw_values(self):
+        from app.services.lead_profile_merge import build_lead_profile
+
+        result = build_lead_profile(
+            lead_id=668,
+            lead_detail={
+                "id": 668,
+                "loan_type": 1,
+                "customer": {
+                    "first_name": "Aman",
+                    "cra_state": 180,
+                    "cra_city": 99,
+                    "marital_status": "married",
+                    "qualification": "graduate",
+                    "language_id": 2,
+                },
+                "lead_details": {
+                    "profession": 1,
+                    "property_state": 293,
+                    "property_city": 300,
+                    "usage_type": 2,
+                },
+            },
+        )
+
+        profile = result["profile"]
+
+        self.assertEqual(profile["raw"]["customer"]["cra_state"], 180)
+        self.assertEqual(profile["raw_facts"]["lead_details.profession"], 1)
+        self.assertEqual(profile["display"]["customer.cra_state"], "Maharashtra")
+        self.assertEqual(profile["display"]["customer.cra_city"], "Bangalore")
+        self.assertEqual(profile["display"]["customer.language_id"], "Hindi")
+        self.assertEqual(profile["display"]["lead_details.profession"], "Salaried")
+        self.assertEqual(profile["display"]["lead_details.property_state"], "Uttar Pradesh")
+        self.assertEqual(profile["display"]["lead_details.property_city"], "Lucknow")
+        self.assertEqual(profile["display"]["lead_details.usage_type"], "Residential")
+        self.assertEqual(result["lead_facts"]["lead_details.profession"], "Salaried")
+        self.assertEqual(result["lead_context"]["facts"]["customer.cra_state"], "Maharashtra")
+        self.assertIn("category_state", profile["stage_state"])
+        self.assertTrue(profile["metadata"]["value_mappings_applied"])
+
     def test_mobile_key_variants_resolve_to_customer_mobile(self):
         registry = get_field_registry()
 
@@ -95,19 +163,33 @@ class WorkflowIntegrationTest(unittest.TestCase):
     def test_core_mapping_coapplicant_ca_fields_fill_workflow_fields(self):
         field_state = build_resolved_field_state(
             lead_detail={
-                "finex_customer_co_applicant": [
+                "co_applicant": [
                     {
+                        "relationship_with_customer": "spouse",
                         "ca_first_name": "Neha",
                         "ca_last_name": "Kumar",
                         "ca_mobile": "9999999999",
+                        "ca_qualification": "graduate",
+                        "ca_type": "financial",
+                        "same_as_cus_addr": "1",
                     }
                 ]
             }
         )
 
+        self.assertEqual(field_state["has_co_applicant"]["value"], "yes")
+        self.assertEqual(field_state["coapplicant_relationship"]["value"], "spouse")
         self.assertEqual(field_state["coapplicant_first_name"]["value"], "Neha")
         self.assertEqual(field_state["coapplicant_last_name"]["value"], "Kumar")
         self.assertEqual(field_state["coapplicant_mobile"]["value"], "9999999999")
+        self.assertEqual(field_state["coapplicant_qualification"]["value"], "graduate")
+        self.assertEqual(field_state["coapplicant_type"]["value"], "financial")
+        self.assertEqual(field_state["coapplicant_same_as_customer_address"]["value"], "1")
+
+    def test_empty_fetched_coapplicant_marks_customer_without_coapplicant(self):
+        field_state = build_resolved_field_state(lead_detail={"co_applicant": []})
+
+        self.assertEqual(field_state["has_co_applicant"]["value"], "no")
 
     def test_realtime_value_overrides_missing_graphql_value(self):
         state = build_resolved_field_state(
@@ -147,8 +229,11 @@ class WorkflowIntegrationTest(unittest.TestCase):
         state = workflow["category_state"]["customer_details"]
 
         self.assertIn("co_applicant_present", state["active_branches"])
+        self.assertIn("coapplicant_relationship", state["missing_fields"])
         self.assertIn("coapplicant_mobile", state["missing_fields"])
         self.assertIn("coapplicant_pan", state["missing_fields"])
+        self.assertIn("coapplicant_same_as_customer_address", state["missing_fields"])
+        self.assertNotIn("coapplicant_address_required", state["active_branches"])
 
     def test_same_customer_address_skips_coapplicant_address_fields(self):
         workflow = compute_workflow_state(
@@ -167,7 +252,7 @@ class WorkflowIntegrationTest(unittest.TestCase):
         workflow = compute_workflow_state(
             resolved_state(
                 has_co_applicant="yes",
-                coapplicant_same_as_customer_address="no",
+                coapplicant_same_as_customer_address="0",
             ),
             active_category="customer_details",
         )
@@ -175,6 +260,20 @@ class WorkflowIntegrationTest(unittest.TestCase):
 
         self.assertIn("coapplicant_address_required", state["active_branches"])
         self.assertIn("coapplicant_city", state["missing_fields"])
+        self.assertIn("coapplicant_address_line2", state["missing_fields"])
+
+    def test_married_coapplicant_activates_spouse_name_only_when_present(self):
+        workflow = compute_workflow_state(
+            resolved_state(
+                has_co_applicant="yes",
+                coapplicant_marital_status="married",
+            ),
+            active_category="customer_details",
+        )
+        state = workflow["category_state"]["customer_details"]
+
+        self.assertIn("married_coapplicant", state["active_branches"])
+        self.assertIn("coapplicant_spouse_name", state["missing_fields"])
 
     def test_completed_customer_details_moves_to_next_incomplete_category(self):
         field_state = resolved_state(
@@ -183,11 +282,27 @@ class WorkflowIntegrationTest(unittest.TestCase):
             is_property_identified="no",
             customer_first_name="Rahul",
             customer_last_name="Sharma",
+            customer_gender="male",
             customer_mobile="9876543210",
             customer_dob="1990-01-01",
             customer_pan="ABCDE1234F",
+            customer_aadhaar="123412341234",
+            customer_email="rahul@example.com",
+            customer_marital_status="single",
+            customer_pincode="400001",
             customer_city="Mumbai",
             customer_state="Maharashtra",
+            customer_address_line1="Line 1",
+            customer_address_line2="Line 2",
+            customer_mother_name="Sunita",
+            customer_qualification="graduate",
+            customer_preferred_language="hindi",
+            customer_office_address="Office address",
+            customer_dependents="2",
+            customer_designation="Manager",
+            customer_occupation="salaried",
+            customer_official_email="rahul@company.com",
+            has_co_applicant="no",
             profession="salaried",
             monthly_salary="150000",
         )

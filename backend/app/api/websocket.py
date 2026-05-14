@@ -10,6 +10,8 @@ from app.services.session_manager import SessionManager
 from app.services.schema_normalizer import normalize_extracted_fields
 from app.services.lead_detail_context import build_lead_context
 from app.services.lead_detail_context import normalize_lead_detail_payload
+from app.services.lead_profile_merge import build_lead_profile
+from app.services.lead_profile_merge import merge_extracted_fields_into_lead
 
 router = APIRouter()
 session_manager = SessionManager()
@@ -43,6 +45,9 @@ class ChatRequest(BaseModel):
     leadDreDocumentError: Any = None
     lead_context: Any = None
     leadContext: Any = None
+    profile: Any = None
+    lead_profile: Any = None
+    leadProfile: Any = None
 
 
 class LeadContextRequest(BaseModel):
@@ -58,6 +63,14 @@ class LeadContextRequest(BaseModel):
     leadDocumentStatus: Any = None
     lead_facts: Any = None
     leadFacts: Any = None
+    profile: Any = None
+    lead_profile: Any = None
+    leadProfile: Any = None
+
+
+class LeadMergeRequest(LeadContextRequest):
+    extracted_fields: dict[str, Any] = Field(default_factory=dict)
+    extractedFields: dict[str, Any] = Field(default_factory=dict)
 
 
 def _normalize_optional_error(value: Any) -> str | None:
@@ -72,6 +85,18 @@ def _has_document_rows(value: Any) -> bool:
     uploaded = value.get("uploaded_documents") or value.get("uploadedDocuments") or value.get("uploaded")
     missing = value.get("missing_documents") or value.get("missingDocuments") or value.get("missing")
     return bool(uploaded or missing)
+
+
+def _profile_raw(profile: Any) -> Any:
+    return profile.get("raw") if isinstance(profile, dict) else None
+
+
+def _profile_display(profile: Any) -> Any:
+    return profile.get("display") if isinstance(profile, dict) else None
+
+
+def _profile_missing_fields(profile: Any) -> Any:
+    return profile.get("missing_fields") if isinstance(profile, dict) else None
 
 
 def _normalize_chat_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -119,27 +144,45 @@ async def summary_chat(request: SummaryChatRequest) -> dict:
 
 @router.post("/api/lead/context")
 async def lead_context(request: LeadContextRequest) -> dict:
-    return build_lead_context(
+    profile = request.profile or request.lead_profile or request.leadProfile
+    return build_lead_profile(
         lead_id=request.lead_id or request.leadId,
-        lead_detail=request.lead_detail or request.leadDetail,
+        lead_detail=request.lead_detail or request.leadDetail or _profile_raw(profile),
+        lead_facts=request.lead_facts or request.leadFacts or _profile_display(profile),
         lead_dre_documents=request.lead_dre_documents or request.leadDreDocuments,
         lead_dre_document_error=_normalize_optional_error(
             request.lead_dre_document_error or request.leadDreDocumentError
         ),
         lead_document_status=request.lead_document_status or request.leadDocumentStatus,
-        lead_facts=request.lead_facts or request.leadFacts,
+    )
+
+
+@router.post("/api/lead/merge-extracted")
+async def lead_merge_extracted(request: LeadMergeRequest) -> dict:
+    profile = request.profile or request.lead_profile or request.leadProfile
+    return merge_extracted_fields_into_lead(
+        lead_id=request.lead_id or request.leadId,
+        lead_detail=request.lead_detail or request.leadDetail or _profile_raw(profile),
+        lead_facts=request.lead_facts or request.leadFacts or _profile_display(profile),
+        extracted_fields=request.extracted_fields or request.extractedFields,
+        lead_dre_documents=request.lead_dre_documents or request.leadDreDocuments,
+        lead_dre_document_error=_normalize_optional_error(
+            request.lead_dre_document_error or request.leadDreDocumentError
+        ),
+        lead_document_status=request.lead_document_status or request.leadDocumentStatus,
     )
 
 
 @router.post("/api/chat")
 async def chat_reply(request: ChatRequest) -> dict:
     lead_id = request.lead_id or request.leadId
+    profile = request.profile or request.lead_profile or request.leadProfile
     lead_context_payload = request.lead_context or request.leadContext
     if not isinstance(lead_context_payload, dict):
         lead_context_payload = None
-    lead_detail = normalize_lead_detail_payload(request.lead_detail or request.leadDetail)
-    lead_facts = request.lead_facts or request.leadFacts
-    lead_missing_fields = request.lead_missing_fields or request.leadMissingFields
+    lead_detail = normalize_lead_detail_payload(request.lead_detail or request.leadDetail or _profile_raw(profile))
+    lead_facts = request.lead_facts or request.leadFacts or _profile_display(profile)
+    lead_missing_fields = request.lead_missing_fields or request.leadMissingFields or _profile_missing_fields(profile)
     if not isinstance(lead_facts, dict):
         lead_facts = None
     if not isinstance(lead_missing_fields, list):
@@ -157,9 +200,13 @@ async def chat_reply(request: ChatRequest) -> dict:
         lead_document_status=lead_document_status,
         lead_facts=lead_facts,
     )
+    if isinstance(lead_facts, dict):
+        built_lead_context["facts"] = lead_facts
     canonical_lead_context = built_lead_context
     if lead_context_payload:
         canonical_lead_context = {**built_lead_context, **lead_context_payload}
+        if isinstance(lead_facts, dict):
+            canonical_lead_context["facts"] = lead_facts
         if not _has_document_rows(lead_context_payload.get("document_status")) and _has_document_rows(
             built_lead_context.get("document_status")
         ):
@@ -204,6 +251,7 @@ async def chat_reply(request: ChatRequest) -> dict:
         **result,
         "lead_id": lead_id or canonical_lead_context.get("lead_id"),
         "lead_context": canonical_lead_context,
+        "profile": profile if isinstance(profile, dict) else None,
         "lead_context_used": bool(
             canonical_lead_context
             or lead_detail

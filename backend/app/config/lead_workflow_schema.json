@@ -5,8 +5,22 @@
       "id": "loan_requirement",
       "label": "Loan Requirement",
       "priority": 20,
-      "topic_triggers": ["loan", "amount", "top up", "balance transfer", "home loan", "lap", "bt", "emi", "roi", "tenure"],
-      "base_required_fields": ["loan_type", "loan_amount"],
+      "topic_triggers": [
+        "loan",
+        "amount",
+        "top up",
+        "balance transfer",
+        "home loan",
+        "lap",
+        "bt",
+        "emi",
+        "roi",
+        "tenure"
+      ],
+      "base_required_fields": [
+        "loan_type",
+        "loan_amount"
+      ],
       "field_priority": [
         "loan_type",
         "loan_amount",
@@ -22,13 +36,31 @@
         {
           "id": "home_loan",
           "label": "Home loan",
-          "when": {"field": "loan_type", "operator": "equals_any", "value": ["1", "home loan", "home"]},
-          "required_fields": ["is_property_identified"]
+          "when": {
+            "field": "loan_type",
+            "operator": "equals_any",
+            "value": [
+              "1",
+              "home loan",
+              "home"
+            ]
+          },
+          "required_fields": [
+            "is_property_identified"
+          ]
         },
         {
           "id": "balance_transfer",
           "label": "Balance transfer",
-          "when": {"field": "loan_type", "operator": "equals_any", "value": ["4", "balance transfer", "bt"]},
+          "when": {
+            "field": "loan_type",
+            "operator": "equals_any",
+            "value": [
+              "4",
+              "balance transfer",
+              "bt"
+            ]
+          },
           "required_fields": [
             "previous_loan_amount",
             "previous_emi_amount",
@@ -41,7 +73,16 @@
         {
           "id": "top_up",
           "label": "Top-up",
-          "when": {"field": "loan_type", "operator": "equals_any", "value": ["3", "top up", "top-up", "topup"]},
+          "when": {
+            "field": "loan_type",
+            "operator": "equals_any",
+            "value": [
+              "3",
+              "top up",
+              "top-up",
+              "topup"
+            ]
+          },
           "required_fields": [
             "previous_loan_amount",
             "remaining_loan_amount",
@@ -53,16 +94,30 @@
     {
       "id": "customer_details",
       "label": "Customer Details",
-      "priority": 10,
-      "topic_triggers": ["customer", "name", "mobile", "dob", "pan", "aadhaar", "address", "city", "pincode", "marital", "spouse", "qualification", "co applicant", "co-applicant"],
       "base_required_fields": [
         "customer_first_name",
         "customer_last_name",
-        "customer_mobile",
+        "customer_gender",
         "customer_dob",
+        "customer_email",
+        "customer_mobile",
         "customer_pan",
+        "customer_aadhaar",
+        "customer_marital_status",
+        "customer_pincode",
+        "customer_state",
         "customer_city",
-        "customer_state"
+        "customer_address_line1",
+        "customer_address_line2",
+        "customer_mother_name",
+        "customer_qualification",
+        "customer_preferred_language",
+        "customer_office_address",
+        "customer_dependents",
+        "customer_designation",
+        "customer_occupation",
+        "customer_official_email",
+        "has_co_applicant"
       ],
       "field_priority": [
         "customer_first_name",
@@ -70,12 +125,24 @@
         "customer_mobile",
         "customer_dob",
         "customer_pan",
+        "customer_aadhaar",
+        "customer_gender",
+        "customer_email",
+        "customer_marital_status",
+        "customer_pincode",
         "customer_city",
         "customer_state",
         "customer_address_line1",
-        "customer_marital_status",
+        "customer_address_line2",
         "customer_mother_name",
-        "customer_email"
+        "customer_qualification",
+        "customer_preferred_language",
+        "customer_office_address",
+        "customer_dependents",
+        "customer_designation",
+        "customer_occupation",
+        "customer_official_email",
+        "has_co_applicant"
       ],
       "sections": [
         {
@@ -86,10 +153,11 @@
             "customer_last_name",
             "customer_gender",
             "customer_dob",
-            "customer_mother_name",
             "customer_marital_status",
+            "customer_mother_name",
             "customer_qualification",
-            "customer_preferred_language"
+            "customer_preferred_language",
+            "customer_spouse_name"
           ]
         },
         {
@@ -98,7 +166,6 @@
           "fields": [
             "customer_mobile",
             "customer_email",
-            "customer_official_email",
             "customer_pan",
             "customer_aadhaar"
           ]
@@ -122,9 +189,14 @@
             "customer_designation",
             "customer_office_address",
             "customer_official_email",
-            "customer_company_name",
-            "customer_total_work_experience",
-            "customer_current_job_years"
+            "customer_dependents"
+          ]
+        },
+        {
+          "id": "co_applicant",
+          "label": "Co-applicant",
+          "fields": [
+            "has_co_applicant"
           ]
         }
       ],
@@ -132,37 +204,83 @@
         {
           "id": "married_customer",
           "label": "Married customer",
-          "when": {"field": "customer_marital_status", "operator": "equals_any", "value": ["married", "1"]},
-          "required_fields": ["customer_spouse_name"]
+          "when": {
+            "field": "customer_marital_status",
+            "operator": "equals_any",
+            "value": [
+              "married",
+              "1"
+            ]
+          },
+          "required_fields": [
+            "customer_spouse_name"
+          ]
         },
         {
           "id": "customer_address_incomplete",
           "label": "Customer address incomplete",
-          "when": {"field": "customer_pincode", "operator": "exists"},
-          "required_fields": ["customer_state", "customer_city", "customer_address_line1"]
-        },
-        {
-          "id": "salaried_or_employed_customer",
-          "label": "Salaried customer",
-          "when": {"field": "customer_occupation", "operator": "matches_any", "value": ["salaried", "job", "employee", "service"]},
+          "when": {
+            "field": "customer_pincode",
+            "operator": "exists"
+          },
           "required_fields": [
-            "customer_company_name",
-            "customer_designation",
-            "customer_total_work_experience",
-            "customer_current_job_years",
-            "customer_official_email"
+            "customer_state",
+            "customer_city",
+            "customer_address_line1"
           ]
         },
         {
           "id": "co_applicant_present",
           "label": "Co-applicant present",
-          "when": {"field": "has_co_applicant", "operator": "truthy"},
+          "when": {
+            "field": "has_co_applicant",
+            "operator": "truthy"
+          },
           "required_fields": [
+            "coapplicant_relationship",
             "coapplicant_first_name",
             "coapplicant_last_name",
-            "coapplicant_mobile",
             "coapplicant_dob",
-            "coapplicant_pan"
+            "coapplicant_email",
+            "coapplicant_mobile",
+            "coapplicant_qualification",
+            "coapplicant_mother_name",
+            "coapplicant_type",
+            "coapplicant_marital_status",
+            "coapplicant_pan",
+            "coapplicant_gender",
+            "coapplicant_aadhaar",
+            "coapplicant_same_as_customer_address",
+            "coapplicant_office_address",
+            "coapplicant_occupation",
+            "coapplicant_official_email",
+            "coapplicant_designation",
+            "coapplicant_total_work_experience",
+            "coapplicant_current_job_years",
+            "coapplicant_company_name"
+          ]
+        },
+        {
+          "id": "married_coapplicant",
+          "label": "Married co-applicant",
+          "when": {
+            "all": [
+              {
+                "field": "has_co_applicant",
+                "operator": "truthy"
+              },
+              {
+                "field": "coapplicant_marital_status",
+                "operator": "equals_any",
+                "value": [
+                  "married",
+                  "1"
+                ]
+              }
+            ]
+          },
+          "required_fields": [
+            "coapplicant_spouse_name"
           ]
         },
         {
@@ -170,38 +288,89 @@
           "label": "Co-applicant address required",
           "when": {
             "all": [
-              {"field": "has_co_applicant", "operator": "truthy"},
-              {"field": "coapplicant_same_as_customer_address", "operator": "falsy"}
+              {
+                "field": "has_co_applicant",
+                "operator": "truthy"
+              },
+              {
+                "field": "coapplicant_same_as_customer_address",
+                "operator": "equals_any",
+                "value": [
+                  "0",
+                  "no",
+                  "different"
+                ]
+              }
             ]
           },
           "required_fields": [
             "coapplicant_pincode",
             "coapplicant_state",
             "coapplicant_city",
-            "coapplicant_address_line1"
+            "coapplicant_address_line1",
+            "coapplicant_address_line2"
           ]
         }
-      ]
+      ],
+      "priority": 10
     },
     {
       "id": "income_details",
       "label": "Income Details",
       "priority": 30,
-      "topic_triggers": ["income", "salary", "profession", "business", "itr", "form 16", "cash", "bank"],
-      "base_required_fields": ["profession"],
-      "field_priority": ["profession", "monthly_salary", "gross_monthly_salary", "income_calculation_mode"],
+      "topic_triggers": [
+        "income",
+        "salary",
+        "profession",
+        "business",
+        "itr",
+        "form 16",
+        "cash",
+        "bank"
+      ],
+      "base_required_fields": [
+        "profession"
+      ],
+      "field_priority": [
+        "profession",
+        "monthly_salary",
+        "gross_monthly_salary",
+        "income_calculation_mode"
+      ],
       "branches": [
         {
           "id": "salaried",
           "label": "Salaried",
-          "when": {"field": "profession", "operator": "matches_any", "value": ["1", "salaried", "salary", "job"]},
-          "required_fields": ["monthly_salary"]
+          "when": {
+            "field": "profession",
+            "operator": "matches_any",
+            "value": [
+              "1",
+              "salaried",
+              "salary",
+              "job"
+            ]
+          },
+          "required_fields": [
+            "monthly_salary"
+          ]
         },
         {
           "id": "self_employed",
           "label": "Self-employed",
-          "when": {"field": "profession", "operator": "matches_any", "value": ["2", "self-employed", "self employed", "business"]},
-          "required_fields": ["income_calculation_mode"]
+          "when": {
+            "field": "profession",
+            "operator": "matches_any",
+            "value": [
+              "2",
+              "self-employed",
+              "self employed",
+              "business"
+            ]
+          },
+          "required_fields": [
+            "income_calculation_mode"
+          ]
         }
       ]
     },
@@ -209,8 +378,20 @@
       "id": "property_details",
       "label": "Property Details",
       "priority": 50,
-      "topic_triggers": ["property", "flat", "ghar", "city", "builder", "project", "registration", "oc", "cc"],
-      "base_required_fields": ["is_property_identified"],
+      "topic_triggers": [
+        "property",
+        "flat",
+        "ghar",
+        "city",
+        "builder",
+        "project",
+        "registration",
+        "oc",
+        "cc"
+      ],
+      "base_required_fields": [
+        "is_property_identified"
+      ],
       "field_priority": [
         "is_property_identified",
         "property_city",
@@ -229,7 +410,10 @@
         {
           "id": "property_identified",
           "label": "Property identified",
-          "when": {"field": "is_property_identified", "operator": "truthy"},
+          "when": {
+            "field": "is_property_identified",
+            "operator": "truthy"
+          },
           "required_fields": [
             "property_city",
             "property_state",
@@ -250,30 +434,56 @@
       "id": "offer_check",
       "label": "Offer Check",
       "priority": 40,
-      "topic_triggers": ["offer", "eligibility", "cibil", "roi", "rate", "approval"],
-      "base_required_fields": ["cibil_score"],
-      "field_priority": ["cibil_score"]
+      "topic_triggers": [
+        "offer",
+        "eligibility",
+        "cibil",
+        "roi",
+        "rate",
+        "approval"
+      ],
+      "base_required_fields": [
+        "cibil_score"
+      ],
+      "field_priority": [
+        "cibil_score"
+      ]
     },
     {
       "id": "fulfillment",
       "label": "Fulfillment",
       "priority": 60,
-      "topic_triggers": ["fulfillment", "process", "documents", "next step"],
-      "base_required_fields": ["fulfillment_type"],
-      "field_priority": ["fulfillment_type"]
+      "topic_triggers": [
+        "fulfillment",
+        "process",
+        "documents",
+        "next step"
+      ],
+      "base_required_fields": [
+        "fulfillment_type"
+      ],
+      "field_priority": [
+        "fulfillment_type"
+      ]
     },
     {
       "id": "details_sheet",
       "label": "Details Sheet",
       "priority": 70,
-      "topic_triggers": ["details sheet", "sheet"],
+      "topic_triggers": [
+        "details sheet",
+        "sheet"
+      ],
       "base_required_fields": []
     },
     {
       "id": "reference",
       "label": "Reference",
       "priority": 80,
-      "topic_triggers": ["reference", "referral"],
+      "topic_triggers": [
+        "reference",
+        "referral"
+      ],
       "base_required_fields": []
     }
   ]

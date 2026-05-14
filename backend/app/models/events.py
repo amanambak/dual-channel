@@ -31,6 +31,11 @@ class AIDoneEvent(BaseModel):
     badgeType: str
 
 
+class ExtractedFieldsEvent(BaseModel):
+    type: str = "extracted_fields_update"
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
 class ErrorEvent(BaseModel):
     type: str = "error"
     source: str

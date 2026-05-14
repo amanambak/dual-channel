@@ -477,11 +477,14 @@ def _maybe_grouped_direct_answer(message: str, lead_detail: dict[str, Any]) -> s
         if status:
             return _format_direct_answer([("DRE", status)])
 
-    if "name" in tokens and "first" not in tokens and "last" not in tokens:
+    asks_name = bool(tokens & {"name", "naam"})
+    if asks_name and "first" not in tokens and "last" not in tokens:
         first_name = _first_value(lead_detail, ["customer.first_name"])
         last_name = _first_value(lead_detail, ["customer.last_name"])
         full_name = " ".join(str(part).strip() for part in (first_name, last_name) if part)
-        if "customer" in tokens or "applicant" in tokens:
+        if "customer" in tokens or "applicant" in tokens or "mera" in tokens:
+            if full_name and "mera" in tokens:
+                return f"Aapka naam {full_name} hai."
             rows = [
                 ("First name", first_name),
                 ("Last name", last_name),
@@ -491,7 +494,22 @@ def _maybe_grouped_direct_answer(message: str, lead_detail: dict[str, Any]) -> s
                 return answer
             return "Customer name loaded lead data mein available nahi hai."
         if "lead" in tokens:
-            return "Lead name loaded lead data mein available nahi hai."
+            if full_name:
+                return _format_direct_answer([("Lead name", full_name)])
+
+            lead_name = _first_value(
+                lead_detail,
+                [
+                    "lead_name",
+                    "name",
+                    "lead_details.lead_name",
+                    "customer.full_name",
+                    "lead_breadcrumb.name",
+                ],
+            )
+            if lead_name:
+                return _format_direct_answer([("Lead name", lead_name)])
+            return ""
 
     if "status" in tokens and not (tokens & {"document", "documents", "doc", "docs", "dre", "marital"}):
         rows = [
@@ -574,6 +592,7 @@ def _looks_like_lead_detail_question(message: str) -> bool:
         "lead",
         "loan",
         "mobile",
+        "naam",
         "name",
         "partner",
         "property",

@@ -535,11 +535,9 @@
           "type": "INT",
           "purpose": "Employment type",
           "key_values": {
-            "1": "Salaried Employee",
-            "2": "Business Employee",
-            "3": "Overseas Employee - Seaman",
-            "4": "Overseas Employee - Working on Land",
-            "5": "Allottee"
+            "1": "Salaried",
+            "2": "Self-Employed Professional",
+            "3": "Self-Employed non-Professional"
           }
         },
         "salary_credit_mode": {
@@ -1230,7 +1228,11 @@
         },
         "language_id": {
           "type": "INT",
-          "purpose": "Preferred language for communications"
+          "purpose": "Preferred language for communications",
+          "key_values": {
+            "1": "Hindi",
+            "2": "English"
+          }
         },
         "is_bulk_upload": {
           "type": "VARCHAR",
@@ -1268,7 +1270,7 @@
       "related_tables": {
         "finex_customer_employment": "one_to_one",
         "finex_customer_bank_details": "one_to_many",
-        "finex_customer_reference": "one_to_many"
+        "finex_cust omer_reference": "one_to_many"
       }
     },
     "finex_split_payment": {

@@ -655,11 +655,11 @@ Start with one logical field list for Customer Details. These are the IDs the wo
 
 The UI label, GraphQL path, old extraction key, and spoken aliases should all map to these IDs.
 
-### 2. Add Customer Field Alias Config
+### 2. Add Customer Field Aliases To The Registry
 
-Create a config file:
+Add customer-specific field aliases to the single registry config:
 
-`backend/app/config/customer_details_field_aliases.json`
+`backend/app/config/field_aliases.json`
 
 Example:
 
@@ -696,13 +696,13 @@ Example:
 }
 ```
 
-This file is not the whole registry. It is the manual correction layer for fields where multiple systems use different names.
+This file is the manual correction layer for fields where multiple systems use different names.
 
-### 3. Add Customer Workflow Config
+### 3. Add Customer Stage To Workflow Config
 
-Create a config file:
+Add the customer-details category to the single workflow config:
 
-`backend/app/config/customer_details_workflow.json`
+`backend/app/config/lead_workflow_schema.json`
 
 ```json
 {
@@ -952,11 +952,10 @@ The model should only phrase the question. It should not decide the next field.
 Implement Customer Details with these changes:
 
 ```text
-backend/app/config/customer_details_field_aliases.json
-backend/app/config/customer_details_workflow.json
+backend/app/config/field_aliases.json
+backend/app/config/lead_workflow_schema.json
 backend/app/services/field_registry.py
 backend/app/services/field_resolver.py
-backend/app/services/customer_details_workflow.py
 backend/app/services/next_action.py
 backend/app/graph/state.py
 backend/app/graph/nodes.py
@@ -973,9 +972,6 @@ load registry sources and resolve raw keys/paths to logical IDs
 
 # field_resolver.py
 convert GraphQL facts and extracted fields into logical field_state entries
-
-# customer_details_workflow.py
-evaluate base required fields, active branches, missing fields, and completion
 
 # next_action.py
 choose next ask_field / switch_category / category_complete action

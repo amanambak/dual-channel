@@ -156,7 +156,6 @@ class FieldRegistry:
 def load_field_registry() -> FieldRegistry:
     registry = FieldRegistry()
     _load_manual_aliases(registry, CONFIG_DIR / "field_aliases.json")
-    _load_manual_aliases(registry, CONFIG_DIR / "customer_details_field_aliases.json")
     _load_core_field_mapping(registry, FIELD_MAPPING_CORE_PATH)
     _load_canonical_mapping(registry, CONFIG_DIR / "canonical_field_mapping.json")
     _mark_priority_fields(registry)

@@ -15,7 +15,7 @@ from app.services.session_text import normalize_confidence
 
 logger = logging.getLogger(__name__)
 
-ASR_AUDIO_QUEUE_FRAMES = 120
+ASR_AUDIO_QUEUE_FRAMES = 40
 AUDIO_DIAGNOSTIC_INTERVAL_SECONDS = 5.0
 
 
@@ -64,10 +64,11 @@ async def run(session) -> None:
 
 
 def update_lead_context(session, data: dict) -> None:
+    profile = data.get("profile") or data.get("lead_profile") or data.get("leadProfile")
     lead_id = data.get("lead_id") or data.get("leadId")
-    lead_facts = data.get("lead_facts") or data.get("leadFacts") or {}
-    lead_detail = data.get("lead_detail") or data.get("leadDetail") or lead_facts
-    lead_missing_fields = data.get("lead_missing_fields") or data.get("leadMissingFields") or []
+    lead_facts = data.get("lead_facts") or data.get("leadFacts") or _profile_display(profile) or {}
+    lead_detail = data.get("lead_detail") or data.get("leadDetail") or _profile_raw(profile) or lead_facts
+    lead_missing_fields = data.get("lead_missing_fields") or data.get("leadMissingFields") or _profile_missing_fields(profile) or []
 
     if lead_id is not None:
         session.state.lead_id = str(lead_id)
@@ -91,6 +92,18 @@ def update_lead_context(session, data: dict) -> None:
         len(session.state.lead_missing_fields),
         len(session.state.lead_priority_missing_fields),
     )
+
+
+def _profile_raw(profile):
+    return profile.get("raw") if isinstance(profile, dict) else None
+
+
+def _profile_display(profile):
+    return profile.get("display") if isinstance(profile, dict) else None
+
+
+def _profile_missing_fields(profile):
+    return profile.get("missing_fields") if isinstance(profile, dict) else None
 
 
 async def handle_text_message(session, raw_message: str) -> None:
